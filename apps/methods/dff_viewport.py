@@ -93,6 +93,7 @@ Standalone tools import from their own methods/dff_viewport.py.
 
 import math
 import struct
+import numpy as np
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import Qt, QPoint
@@ -120,8 +121,27 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
     Shared base for Model Viewer, Model Workshop, Vehicle Workshop.
     """
 
-    def __init__(self, parent=None): #vers 1
+    def __init__(self, parent=None): #vers 2
         super().__init__(parent)
+        if OPENGL_AVAILABLE:
+            # Per-instance format, not just the module-level default
+            # (Aug 1 2026, per Keith: "we have a blank window in the
+            # last push... QOpenGLWidget: Failed to create context").
+            # QSurfaceFormat.setDefaultFormat (set at this module's
+            # import time, above) only reliably takes effect if it
+            # runs *before* QApplication is constructed - true when
+            # Map Workshop runs standalone (its own __main__ block
+            # constructs QApplication after this module is already
+            # imported... but genuinely too late whenever this module
+            # gets imported into an *already-running* host application
+            # instead - exactly Keith's confirmed setup, Map Workshop
+            # embedded as a tab inside IMG Factory's own main window,
+            # whose QApplication already exists before this module is
+            # ever imported). setFormat() directly on each widget
+            # instance works correctly regardless of that timing, so
+            # doing this too whenever an instance is actually created
+            # removes the dependency on import-order timing entirely.
+            self.setFormat(_fmt)
         self.setMinimumSize(200, 200)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -158,6 +178,54 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         self._all_geoms     = []
         self._assembly_mode = False
         self._show_lod      = False
+
+        # World instances (Aug 1 2026, per Keith: "wire every pane
+        # into the viewport, when I load ipl, these dont show" -
+        # full multi-instance 3D world view) - each entry is a dict:
+        # {'vertices','normals','uvs','triangles','materials','prelit',
+        #  'pos':(x,y,z), 'rot':(x,y,z,w) quaternion, 'scale':(x,y,z)}.
+        # Distinct from _all_geoms (which draws multiple geometries at
+        # the SAME shared origin/camera transform, for viewing one
+        # DFF's assembled parts) - these each get their own
+        # glPushMatrix/glTranslatef/rotate/glScalef/glPopMatrix.
+        self._world_instances = []
+        # Display-list cache, keyed by (model_key, render mode) (Aug 1
+        # 2026, per Keith: "bottlenecking is trying to move the
+        # objects in the viewer") - immediate-mode OpenGL (glBegin/
+        # glVertex per triangle) was being fully re-executed in Python
+        # for every instance, every single repaint (including every
+        # frame during an interactive camera drag) - with many
+        # instances sharing a handful of distinct models, this
+        # compiles each DISTINCT model's geometry into a GL display
+        # list ONCE, then every instance of it just replays the
+        # pre-compiled list (glCallList) - the expensive per-triangle
+        # work only happens once per model per render mode, not once
+        # per instance per frame.
+        self._world_display_lists = {}
+
+        # Collision overlay toggles (Aug 14 2026, per Keith: "add
+        # collisions to the IPL control pane... load solid collision,
+        # load semi-solid, wireframe cols, and solid with surface
+        # mapping" -> "Ghost is a good idea; Show Ghosted Col, Show
+        # Surface Mapped Col, Show Semi-Solid Col, Show Wireframe
+        # Col") - four independent checkboxes, not an exclusive
+        # group like render mode: any combination can be on at once
+        # (e.g. Wireframe Col over a Ghosted Col fill is a normal
+        # thing to want). Each draws as an overlay on top of the
+        # already-drawn model, never replacing it - "ghost" is the
+        # whole point, not just one of the four modes. All off by
+        # default.
+        self.show_col_ghosted        = False
+        self.show_col_semi_solid     = False
+        self.show_col_wireframe      = False
+        self.show_col_surface_mapped = False
+        # Separate display-list cache, keyed by (model_key, col mode) -
+        # mirrors _world_display_lists exactly but kept apart since a
+        # model's collision geometry is entirely different data
+        # (COLModel vertices/faces, not DFF) from its render mesh, and
+        # the two get cleared independently: toggling a collision
+        # checkbox never needs to touch the model's own display lists.
+        self._col_display_lists = {}
 
         # Wheels
         self._wheels_model      = None
@@ -331,6 +399,55 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
             if d2 < best_d2 or (best_key is not None and d2 <= best_d2 and t < best_t):
                 best_key, best_t, best_d2 = (i, j), t, d2
         return best_key
+
+    def _pick_world_instance(self, mx: float, my: float): #vers 1
+        """Return the index into self._world_instances closest to the
+        ray through (mx,my), within a tolerance that scales with
+        camera distance (same pattern as _pick_vertex/_pick_edge just
+        above - reuses the exact same _pick_ray/_closest_point_on_ray
+        infrastructure, just testing against each instance's world
+        position instead of mesh vertices/edges). Picks by distance
+        from the instance's origin point to the ray, not full
+        per-triangle mesh intersection (_ray_triangle_intersect exists
+        and would be more precise, but re-testing every triangle of
+        every instance on every click would be considerably slower for
+        a whole loaded map - this is fast and good enough for clicking
+        roughly on/near an object). Aug 1 2026, per Keith: "im trying
+        to select a tree double clicking on it, so I can see its edit
+        dialog window.\""""
+        ray = self._pick_ray(mx, my)
+        if ray is None or not self._world_instances:
+            return None
+        origin, direction = ray
+        tol2 = (self._dist * 0.05) ** 2
+        best_i, best_t, best_d2 = None, None, tol2
+        for i, entry in enumerate(self._world_instances):
+            pos = entry.get('pos')
+            if pos is None:
+                continue
+            t, d2 = self._closest_point_on_ray(origin, direction, pos)
+            if t < 0:
+                continue
+            if d2 < best_d2 or (best_i is not None and d2 <= best_d2 and t < best_t):
+                best_i, best_t, best_d2 = i, t, d2
+        return best_i
+
+    def mouseDoubleClickEvent(self, event): #vers 1
+        """Double-clicking a world instance opens its edit dialog (Aug
+        1 2026, per Keith - see _pick_world_instance's docstring).
+        Only active when a world (multi-instance) view is actually
+        loaded - self._workshop_ref is set at construction
+        (model_workshop.py) regardless of mode, so this checks
+        _world_instances specifically rather than assuming."""
+        if self._world_instances:
+            pos = event.position()
+            idx = self._pick_world_instance(pos.x(), pos.y())
+            if idx is not None:
+                ws = getattr(self, '_workshop_ref', None)
+                if ws is not None and hasattr(ws, '_on_world_instance_picked'):
+                    ws._on_world_instance_picked(idx)
+                    return
+        super().mouseDoubleClickEvent(event)
 
     def _ray_triangle_intersect(self, origin, direction, v0, v1, v2): #vers 1
         """Möller–Trumbore ray/triangle test. Returns t (distance along the
@@ -528,8 +645,17 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         else:
             glDisable(GL_CULL_FACE)
         self._setup_lighting()
+        has_world = bool(getattr(self, '_world_instances', None))
         has_geoms = bool(getattr(self, '_all_geoms', None))
         has_verts = bool(self._vertices)
+        if has_world:
+            self._draw_world_instances()
+            self._draw_2dfx_lights()
+            if getattr(self, '_lod_test_center', None) is not None:
+                self._draw_lod_test_circle()
+            if self._show_grid: self._draw_grid()
+            self._draw_axes()
+            return
         if not has_geoms and not has_verts:
             if self._show_grid: self._draw_grid()
             self._draw_axes()
@@ -539,6 +665,7 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         elif has_verts:
             if   self._mode == 'wireframe': self._draw_wireframe()
             elif self._mode == 'solid':     self._draw_solid()
+            elif self._mode == 'semi_solid': self._draw_solid(alpha_multiplier=0.5)
             elif self._mode == 'textured':  self._draw_textured()
             self._draw_selection_overlay()
         if self._show_grid: self._draw_grid()
@@ -603,6 +730,52 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
             if has_u:
                 u = uvs[vi]; glTexCoord2f(u[0], u[1])
             v = verts[vi]; glVertex3f(v[0], v[1], v[2])
+
+    def _draw_collision_faces(self, mode): #vers 1
+        """Draw self._col_vertices/self._col_triangles as a ghost
+        overlay on top of whatever's already been drawn for this
+        instance (Aug 14 2026, per Keith: "Ghost is a good idea" -
+        collision never replaces the model, always draws over it).
+        mode: 'ghosted'|'semi_solid'|'wireframe'|'surface_mapped'.
+        Unlit throughout (COLVertex carries no normal, unlike DFF
+        geometry) - flat colour reads clearly enough for a collision
+        overlay and avoids needing to fabricate face normals just for
+        lighting. col_triangles entries are (v1,v2,v3,r,g,b) with
+        r,g,b already resolved to floats 0-1 by the caller (map_
+        workshop.py, via col_materials.get_material_colour) -
+        surface_mapped uses them per-face, the other three modes use
+        one flat colour so every mode stays visually distinct from
+        the model's own render style and from each other."""
+        if not OPENGL_AVAILABLE: return
+        verts = getattr(self, '_col_vertices', None)
+        tris  = getattr(self, '_col_triangles', None)
+        if not verts or not tris: return
+        glDisable(GL_LIGHTING)
+        if mode == 'wireframe':
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            glColor3f(1.0, 0.3, 0.3); glLineWidth(1.0)
+            glBegin(GL_TRIANGLES)
+            for v1, v2, v3, r, g, b in tris:
+                for vi in (v1, v2, v3):
+                    if vi < len(verts):
+                        v = verts[vi]; glVertex3f(v[0], v[1], v[2])
+            glEnd()
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        else:
+            alpha = {'ghosted': 0.25, 'semi_solid': 0.5, 'surface_mapped': 0.45}.get(mode, 0.3)
+            glEnable(GL_BLEND); glDepthMask(False)
+            glBegin(GL_TRIANGLES)
+            for v1, v2, v3, r, g, b in tris:
+                if mode == 'surface_mapped':
+                    glColor4f(r, g, b, alpha)
+                else:
+                    glColor4f(1.0, 0.55, 0.15, alpha)
+                for vi in (v1, v2, v3):
+                    if vi < len(verts):
+                        v = verts[vi]; glVertex3f(v[0], v[1], v[2])
+            glEnd()
+            glDepthMask(True); glDisable(GL_BLEND)
+        glEnable(GL_LIGHTING)
 
     def _draw_wireframe(self): #vers 1
         if not OPENGL_AVAILABLE: return
@@ -672,7 +845,7 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
 
-    def _draw_solid(self): #vers 3
+    def _draw_solid(self, alpha_multiplier=1.0): #vers 4
         if not OPENGL_AVAILABLE: return
         flags = self._geom_flags()
         use_lighting = bool(flags & self.rpGEOMETRYLIGHT) and bool(self._normals)
@@ -684,9 +857,18 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
             glDisable(GL_LIGHTING)
         use_p = (use_prelit or self._use_prelight) and bool(self._prelit)
         opaque = []; transparent = []
+        # alpha_multiplier < 1.0 (Aug 1 2026, Semi-Solid render mode -
+        # per Keith: "Render view should me merged with LOD view,
+        # labeled as Render: Texture, Non-texture, Semi-Solid,
+        # Wireframe...") forces every triangle through the blend path
+        # below instead of the opaque one, scaling its alpha down
+        # uniformly - a plain "ghosted" look, distinct from Non-
+        # Textured (which is fully opaque flat/lit shading).
+        force_transparent = alpha_multiplier < 0.999
         for tri in self._triangles:
             fc = self._face_color(tri[3])
-            (transparent if len(fc)>3 and fc[3]<0.99 else opaque).append((tri,fc))
+            is_transparent = force_transparent or (len(fc) > 3 and fc[3] < 0.99)
+            (transparent if is_transparent else opaque).append((tri, fc))
         glBegin(GL_TRIANGLES)
         for (v1,v2,v3,mid),(r,g,b,*rest) in opaque:
             a = rest[0] if rest else 1.0
@@ -698,7 +880,9 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         if transparent:
             glEnable(GL_BLEND); glDepthMask(False)
             glBegin(GL_TRIANGLES)
-            for (v1,v2,v3,mid),(r,g,b,a) in transparent:
+            for (v1,v2,v3,mid),fc in transparent:
+                r, g, b = fc[0], fc[1], fc[2]
+                a = (fc[3] if len(fc) > 3 else 1.0) * alpha_multiplier
                 if not use_p:
                     if use_modulate: glColor4f(r,g,b,a)
                     else: glColor4f(1.0,1.0,1.0,a)
@@ -716,7 +900,7 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
         glDisable(GL_POLYGON_OFFSET_LINE)
 
-    def _draw_textured(self): #vers 3
+    def _draw_textured(self): #vers 4
         if not OPENGL_AVAILABLE: return
         flags = self._geom_flags()
         use_lighting = bool(flags & self.rpGEOMETRYLIGHT) and bool(self._normals)
@@ -729,6 +913,22 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         glEnable(GL_TEXTURE_2D)
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE,
                   GL_MODULATE if use_modulate else GL_REPLACE)
+        # Alpha-textured objects (Aug 1 2026, per Keith: "show any
+        # objects with alpha textures, as that would display in the
+        # game") - chain-link fences, foliage, glass etc. rely on
+        # per-pixel alpha baked into the texture itself (already
+        # uploaded to the GPU correctly via GL_RGBA in
+        # _upload_textures), not material face-color alpha, which is
+        # what the opaque/transparent batch split below is actually
+        # keyed on - most such objects' materials are still alpha=1.0,
+        # so without this they rendered fully opaque regardless of
+        # what their texture's own alpha channel says. GL_ALPHA_TEST
+        # gives cutout-style transparency (a pixel either draws fully
+        # or not at all, based on a threshold) rather than smooth
+        # blending - deliberately, since it needs no back-to-front
+        # sorting and doesn't disturb depth writes, unlike GL_BLEND.
+        glEnable(GL_ALPHA_TEST)
+        glAlphaFunc(GL_GREATER, 0.5)
         use_p = (use_prelit or self._use_prelight) and bool(self._prelit)
         mats  = self._materials
         batches: Dict[tuple,list] = {}
@@ -761,6 +961,7 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
                 glEnd()
             if use_blend: glDepthMask(True); glDisable(GL_BLEND)
         glBindTexture(GL_TEXTURE_2D, 0); glDisable(GL_TEXTURE_2D)
+        glDisable(GL_ALPHA_TEST)
         no_opaque = [t for t in no_tex if self._face_color(t[3])[3]>=0.99]
         no_transp = [t for t in no_tex if self._face_color(t[3])[3]<0.99]
         for tri_list, use_blend in [(no_opaque,False),(no_transp,True)]:
@@ -826,6 +1027,32 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
             rgba = tex.get('rgba_data', b'')
             w    = tex.get('width', 0); h = tex.get('height', 0)
             if not (name and rgba and w > 0 and h > 0): continue
+            # Skip re-uploading an already-loaded texture (Aug 1 2026,
+            # per Keith: "loading textures using alot of memory",
+            # plus a real crash at glTexImage2D) - this previously
+            # created a brand new GL texture object unconditionally on
+            # every single call, even for a name already in self.
+            # _tex_ids, silently orphaning the old GL texture ID's
+            # VRAM (self._tex_ids[name] = gl_id just overwrites the
+            # dict entry, never calling glDeleteTextures on what it
+            # replaced) - a genuine, severe leak. Most damaging under
+            # LOD Test mode specifically, where _refresh_world_view
+            # (and therefore this method, with additive=True) reruns
+            # on every single mouse move, re-uploading the same
+            # already-loaded textures repeatedly and leaking a fresh
+            # copy of each one's VRAM every time, until the driver
+            # eventually fails to allocate more and crashes exactly
+            # where Keith's traceback shows. A texture's pixel data
+            # for a given name doesn't change between calls, so
+            # there's nothing to gain from re-uploading it - name is
+            # a stable, sufficient cache key here.
+            if name in self._tex_ids:
+                continue
+            if getattr(self, '_texture_downscale_enabled', False):
+                threshold = getattr(self, '_texture_downscale_threshold', 512)
+                if w > threshold or h > threshold:
+                    target = getattr(self, '_texture_downscale_target', 256)
+                    rgba, w, h = self._downscale_rgba(rgba, w, h, target)
             wrap_u = tex.get('wrap_u', 1)
             wrap_v = tex.get('wrap_v', 1)
             gl_wrap_s = self._rw_wrap_to_gl(wrap_u)
@@ -857,6 +1084,51 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
         self._pending_textures = []
         self._upload_textures(pending, additive=True)
         self.update()
+
+    def set_texture_downscale_settings(self, enabled, threshold=512, target=256): #vers 1
+        """Configure texture downscaling - per Keith: "loading
+        textures using alot of memory, so im thinking about a texture
+        reduction option, keep 64. 128, 256 untouched but render down
+        to 256x256 anything over 512x512." Stored as instance
+        attributes rather than threaded through every call, since
+        _upload_textures is the single central place all texture
+        uploads go through regardless of caller (the world-view
+        pipeline, _flush_pending_textures, and any other direct
+        caller) - setting it once here covers all of them."""
+        self._texture_downscale_enabled = enabled
+        self._texture_downscale_threshold = threshold
+        self._texture_downscale_target = target
+
+    def _downscale_rgba(self, rgba, w, h, target): #vers 1
+        """Downsample RGBA8888 pixel data to target x target using
+        numpy - per Keith's texture reduction request (see set_
+        texture_downscale_settings). Block-averaging for the clean-
+        multiple case (w and h both evenly divisible by target - true
+        for every size Keith actually mentioned: 512/256=2,
+        1024/256=4, 2048/256=8, all clean integer ratios for power-of-
+        2 game textures), which gives noticeably better quality than
+        nearest-neighbor since it blends each output pixel from its
+        whole source block rather than picking one sample and
+        discarding the rest. Falls back to simple nearest-neighbor
+        index sampling for any size that doesn't divide evenly (rare
+        for game textures, but not impossible) - always produces a
+        valid target x target result either way, never raises for a
+        mismatched size. Returns (new_rgba_bytes, target, target)."""
+        arr = np.frombuffer(rgba, dtype=np.uint8)
+        expected = w * h * 4
+        if arr.size != expected:
+            arr = np.resize(arr, expected)   # defensive - malformed input shouldn't crash the upload
+        arr = arr.reshape(h, w, 4)
+        if w % target == 0 and h % target == 0:
+            block_w = w // target
+            block_h = h // target
+            arr = arr.reshape(target, block_h, target, block_w, 4)
+            downsampled = arr.mean(axis=(1, 3)).astype(np.uint8)
+        else:
+            row_idx = (np.arange(target) * h // target)
+            col_idx = (np.arange(target) * w // target)
+            downsampled = arr[row_idx][:, col_idx]
+        return downsampled.tobytes(), target, target
 
     def clear_textures(self): #vers 2
         if OPENGL_AVAILABLE and self._tex_ids:
@@ -1051,6 +1323,33 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
     def set_assembly_mode(self, enabled: bool): #vers 1
         self._assembly_mode = enabled; self.update()
 
+    def set_show_col_ghosted(self, enabled: bool): #vers 1
+        self.show_col_ghosted = enabled; self.update()
+
+    def set_show_col_semi_solid(self, enabled: bool): #vers 1
+        self.show_col_semi_solid = enabled; self.update()
+
+    def set_show_col_wireframe(self, enabled: bool): #vers 1
+        self.show_col_wireframe = enabled; self.update()
+
+    def set_show_col_surface_mapped(self, enabled: bool): #vers 1
+        self.show_col_surface_mapped = enabled; self.update()
+
+    def _clear_col_display_lists(self): #vers 1
+        """Same reasoning as _clear_world_display_lists, kept as its
+        own method since collision lists live in a separate cache -
+        call when the world/IPL set genuinely changes (a model's
+        collision data can't change without that)."""
+        if OPENGL_AVAILABLE and self._col_display_lists and self.isValid():
+            try:
+                self.makeCurrent()
+                for list_id in self._col_display_lists.values():
+                    glDeleteLists(list_id, 1)
+                self.doneCurrent()
+            except Exception:
+                pass
+        self._col_display_lists = {}
+
     def set_show_lod(self, enabled: bool): #vers 1
         self._show_lod = enabled; self.update()
 
@@ -1068,10 +1367,272 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
             self._current_geom_flags=geom_flags
             if   self._mode=='wireframe': self._draw_wireframe()
             elif self._mode=='solid':     self._draw_solid()
+            elif self._mode=='semi_solid': self._draw_solid(alpha_multiplier=0.5)
             elif self._mode=='textured':  self._draw_textured()
             (self._vertices,self._normals,self._uvs,
              self._triangles,self._materials,self._prelit,
              self._current_geom_flags) = (old_v,old_n,old_u,old_t,old_m,old_p,old_f)
+
+    def set_world_instances(self, entries, auto_fit=True, clear_display_lists=True): #vers 4
+        """Load a whole set of positioned instances for a full
+        multi-instance world view (Aug 1 2026, per Keith: "wire every
+        pane into the viewport, when I load ipl, these dont show").
+        entries: list of dicts, each:
+          {'vertices': [(x,y,z),...], 'normals': [...] or [],
+           'uvs': [...] or [], 'triangles': [(v1,v2,v3,mat_id),...],
+           'materials': [...], 'prelit': [...] or [],
+           'pos': (x,y,z), 'rot': (x,y,z,w) quaternion, 'scale': (x,y,z),
+           'model_key': <hashable, shared by every instance of the
+           same model - used to build one display list per distinct
+           model instead of one per instance>}
+        Caller (ModelWorkshop._refresh_world_view) is responsible for
+        converting each instance's cached DFFModel geometry into this
+        shape - same field names/format load_geometry() already uses
+        internally, just per-instance instead of one shared set.
+
+        clear_display_lists=False (Aug 1 2026, per Keith: "touching
+        time, tick, 12:00 [Play] Appears to freeze things?") - by
+        default this discards every previously-compiled display list
+        on every single call ("a new world/IPL selection means the
+        old models' compiled geometry is no longer relevant" - true
+        for a genuine new-world load, but this same method also gets
+        called on every single TOBJ time-flow tick and every 2DFX
+        light refresh via _refresh_world_view, none of which change
+        which distinct *models* exist - only which instances of them
+        are currently visible). Unconditionally recompiling every
+        model's display lists once a second (the default tick
+        interval) for a map with many distinct models is exactly the
+        "freeze" Keith saw when pressing Play - unnecessary work, not
+        a real limitation. Callers that know the model set itself
+        hasn't changed (just instance-level visibility) can now skip
+        the wipe and let already-compiled lists for still-visible
+        models keep being reused as-is.
+
+        auto_fit=False (Aug 1 2026, per Keith: "When moving an object
+        with the object editor... the viewpoint zooms out
+        automatically; the viewpoint should stay on the chosen
+        object") - every nudge edit re-applies the IPL visibility
+        filter to keep the World View panes in sync
+        (ModelWorkshop._on_instance_edited), which calls this same
+        method; auto-fitting on every single nudge was re-framing the
+        camera to the whole map's bounding box each time, fighting
+        whatever position the user had just navigated to. Real loads/
+        IPL switches still want the fit (finding the newly-visible
+        content is the point there); edit-triggered refreshes don't."""
+        if clear_display_lists:
+            self._clear_world_display_lists()
+            self._clear_col_display_lists()
+        self._world_instances = entries or []
+        if self._world_instances and auto_fit:
+            self._auto_fit_world()
+        self.update()
+
+    def update_instance_transform(self, inst, pos, rot, scale): #vers 1
+        """Update just one already-rendered instance's position/
+        rotation/scale in place, without touching any other entry or
+        rebuilding the world-instances list at all - per Keith: "when
+        moving any object using the IPL object editor, it takes so
+        long for anything to change; is there a way to only update
+        the object thats been moved, not freshing the whole
+        viewport." Previously every nudge went through the full
+        _apply_ipl_visibility_filter -> _refresh_world_view pipeline,
+        rebuilding a fresh entry dict for every visible instance in
+        the whole map just to reflect one changed instance - correct
+        but wasteful for a single edit, since geometry/display lists
+        for every *other* instance are completely unaffected by it.
+
+        Finds the matching entry by identity (entry['instance'] is
+        inst, set when _refresh_world_view originally built the list -
+        see its own code) rather than by position/name, since those
+        are exactly what's changing and can't be used to look the
+        instance up. Returns True if a match was found and updated,
+        False otherwise (caller should fall back to the full pipeline
+        in that case - e.g. the very first time this instance is
+        edited before any full refresh has ever run)."""
+        for entry in getattr(self, '_world_instances', None) or []:
+            if entry.get('instance') is inst:
+                entry['pos'] = pos
+                entry['rot'] = rot
+                entry['scale'] = scale
+                self.update()
+                return True
+        return False
+
+    def clear_world_instances(self): #vers 2
+        self._clear_world_display_lists()
+        self._clear_col_display_lists()
+        self._world_instances = []
+        self.update()
+
+    def _clear_world_display_lists(self): #vers 1
+        if OPENGL_AVAILABLE and self._world_display_lists and self.isValid():
+            try:
+                self.makeCurrent()
+                for list_id in self._world_display_lists.values():
+                    glDeleteLists(list_id, 1)
+                self.doneCurrent()
+            except Exception:
+                pass
+        self._world_display_lists = {}
+
+    @staticmethod
+    def _quat_to_gl_matrix(x, y, z, w): #vers 1
+        """Quaternion -> 16-float column-major 4x4 rotation matrix,
+        the layout glMultMatrixf expects directly. Standard formula -
+        each group of 4 below is one column, not one row."""
+        xx, yy, zz = x*x, y*y, z*z
+        xy, xz, yz = x*y, x*z, y*z
+        wx, wy, wz = w*x, w*y, w*z
+        return [
+            1.0-2.0*(yy+zz), 2.0*(xy+wz),     2.0*(xz-wy),     0.0,
+            2.0*(xy-wz),     1.0-2.0*(xx+zz), 2.0*(yz+wx),     0.0,
+            2.0*(xz+wy),     2.0*(yz-wx),     1.0-2.0*(xx+yy), 0.0,
+            0.0,              0.0,             0.0,             1.0,
+        ]
+
+    def _draw_world_instances(self): #vers 2
+        """Per instance: glPushMatrix/translate/rotate/scale, then
+        replay a pre-compiled display list (Aug 1 2026 perf fix, per
+        Keith: "bottlenecking is trying to move the objects in the
+        viewer") - built once per (model, render mode) the first time
+        it's needed, cached in self._world_display_lists, and just
+        glCallList'd (cheap - no Python per-triangle loop, no
+        per-vertex glBegin/glVertex calls) on every subsequent
+        instance and every subsequent frame. Building a list happens
+        with NO transform applied (raw local-space geometry only) -
+        the per-instance position/rotation/scale is applied outside
+        the list, every time, via the surrounding
+        glPushMatrix/.../glPopMatrix, so one compiled list correctly
+        serves every instance of that model regardless of where
+        they're each positioned."""
+        if not OPENGL_AVAILABLE: return
+        old_v,old_n,old_u,old_t,old_m,old_p,old_f = (
+            self._vertices,self._normals,self._uvs,
+            self._triangles,self._materials,self._prelit,
+            getattr(self,'_current_geom_flags',0))
+        # Which collision overlay modes are currently on (Aug 14 2026)
+        # - checked once per frame, not per instance, since none of
+        # these depend on anything instance-specific.
+        col_modes = []
+        if self.show_col_ghosted:        col_modes.append('ghosted')
+        if self.show_col_semi_solid:     col_modes.append('semi_solid')
+        if self.show_col_wireframe:      col_modes.append('wireframe')
+        if self.show_col_surface_mapped: col_modes.append('surface_mapped')
+        old_cv, old_ct = (getattr(self, '_col_vertices', None),
+                          getattr(self, '_col_triangles', None))
+        for entry in self._world_instances:
+            model_key = entry.get('model_key', id(entry))
+            cache_key = (model_key, self._mode)
+            list_id = self._world_display_lists.get(cache_key)
+            if list_id is None:
+                list_id = glGenLists(1)
+                self._vertices  = entry.get('vertices', [])
+                self._normals   = entry.get('normals', [])
+                self._uvs       = entry.get('uvs', [])
+                self._triangles = entry.get('triangles', [])
+                self._materials = entry.get('materials', [])
+                self._prelit    = entry.get('prelit', [])
+                glNewList(list_id, GL_COMPILE)
+                if   self._mode=='wireframe': self._draw_wireframe()
+                elif self._mode=='solid':     self._draw_solid()
+                elif self._mode=='semi_solid': self._draw_solid(alpha_multiplier=0.5)
+                elif self._mode=='textured':  self._draw_textured()
+                glEndList()
+                self._world_display_lists[cache_key] = list_id
+            glPushMatrix()
+            px, py, pz = entry.get('pos', (0.0, 0.0, 0.0))
+            glTranslatef(px, py, pz)
+            rx, ry, rz, rw = entry.get('rot', (0.0, 0.0, 0.0, 1.0))
+            glMultMatrixf(self._quat_to_gl_matrix(rx, ry, rz, rw))
+            sx, sy, sz = entry.get('scale', (1.0, 1.0, 1.0))
+            glScalef(sx, sy, sz)
+            glCallList(list_id)
+            # Collision overlay (Aug 14 2026) - drawn inside the same
+            # instance transform, right after the model itself, so it
+            # sits exactly where the model's own collision belongs.
+            # A separate display list per (model_key, col mode), built
+            # lazily the same way as the model's own lists - only
+            # entries with actual col_vertices/col_triangles (from a
+            # model that had matching collision data indexed) produce
+            # anything; the rest are silent no-ops via the length
+            # check in _draw_collision_faces.
+            if col_modes and entry.get('col_vertices') and entry.get('col_triangles'):
+                self._col_vertices  = entry.get('col_vertices')
+                self._col_triangles = entry.get('col_triangles')
+                for mode in col_modes:
+                    col_cache_key = (model_key, mode)
+                    col_list_id = self._col_display_lists.get(col_cache_key)
+                    if col_list_id is None:
+                        col_list_id = glGenLists(1)
+                        glNewList(col_list_id, GL_COMPILE)
+                        self._draw_collision_faces(mode)
+                        glEndList()
+                        self._col_display_lists[col_cache_key] = col_list_id
+                    glCallList(col_list_id)
+            glPopMatrix()
+        (self._vertices,self._normals,self._uvs,
+         self._triangles,self._materials,self._prelit,
+         self._current_geom_flags) = (old_v,old_n,old_u,old_t,old_m,old_p,old_f)
+        self._col_vertices, self._col_triangles = old_cv, old_ct
+
+    def set_2dfx_lights(self, lights): #vers 1
+        """Store the current set of 2DFX light points to render - per
+        Keith: "lets add the 2dfx support next, showing 2dfx lighting
+        at night." lights: list of (x, y, z, r, g, b, a, size) tuples
+        in WORLD space (caller - ModelWorkshop._refresh_2dfx_lights -
+        is responsible for computing each light's world position from
+        its owning instance's position/rotation plus the 2DFX entry's
+        own local offset, and for deciding which lights should be
+        showing at all based on the simulated time-of-day, e.g. only
+        collecting them at night). Empty list clears them (e.g. Time
+        switch off, or daytime)."""
+        self._2dfx_lights = lights or []
+        self.update()
+
+    def _draw_2dfx_lights(self): #vers 1
+        """Render every current 2DFX light as a glowing point - a
+        deliberately simple, reliable rendering technique (a single
+        GL_POINTS draw with additive blending and no depth writes,
+        rather than sprite/billboard geometry) since it needs no UV/
+        texture setup and still reads as "something is glowing here"
+        at typical map-view zoom levels. size (parsed from the 2DFX
+        entry's own corona_size where available, else a fallback)
+        scales the point - real corona sprites would scale with
+        camera distance for a true billboard look, which this doesn't
+        attempt yet."""
+        if not OPENGL_AVAILABLE: return
+        lights = getattr(self, '_2dfx_lights', None)
+        if not lights:
+            return
+        glDisable(GL_LIGHTING)
+        glDisable(GL_TEXTURE_2D)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)   # additive - glow, not a flat dot
+        glDepthMask(False)
+        glPointSize(8.0)
+        for x, y, z, r, g, b, a, size in lights:
+            glPointSize(max(2.0, 8.0 * size))
+            glBegin(GL_POINTS)
+            glColor4f(r / 255.0, g / 255.0, b / 255.0, a / 255.0)
+            glVertex3f(x, y, z)
+            glEnd()
+        glDepthMask(True)
+        glDisable(GL_BLEND)
+        glEnable(GL_LIGHTING)
+
+    def _auto_fit_world(self): #vers 1
+        """Frame the camera around every instance's WORLD position
+        (not vertex-level detail like _auto_fit - map-scale distances
+        make individual meshes irrelevant to the initial framing)."""
+        if not self._world_instances: return
+        xs = [e.get('pos', (0,0,0))[0] for e in self._world_instances]
+        ys = [e.get('pos', (0,0,0))[1] for e in self._world_instances]
+        zs = [e.get('pos', (0,0,0))[2] for e in self._world_instances]
+        diag = math.sqrt((max(xs)-min(xs))**2+(max(ys)-min(ys))**2+(max(zs)-min(zs))**2)
+        self._dist  = max(diag*0.75, 10.0)
+        self._pan_x = -(max(xs)+min(xs))/2
+        self._pan_y = -(max(ys)+min(ys))/2
+        self.update()
 
     def set_prelight(self, v: bool): #vers 1
         self._use_prelight = v; self.update()
@@ -1145,17 +1706,108 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
                 self._notify_selection_changed()
                 self.update()
 
-    def mouseMoveEvent(self, event): #vers 2
+    def mouseMoveEvent(self, event): #vers 3
         dx = event.pos().x() - self._last_pos.x()
         dy = event.pos().y() - self._last_pos.y()
+        sens = getattr(self, '_mouse_sensitivity', 1.0)
         if event.buttons() & Qt.MouseButton.RightButton and not self._view_locked:
-            self._yaw   += dx * 0.5
-            self._pitch += dy * 0.5
+            self._yaw   += dx * 0.5 * sens
+            self._pitch += dy * 0.5 * sens
         elif event.buttons() & Qt.MouseButton.MiddleButton:
-            scale = self._dist * 0.002
-            self._pan_x += dx * scale
-            self._pan_y -= dy * scale
+            # Yaw-compensated pan (Aug 1 2026, per Keith: "moving the
+            # mouse left, should always reflect moving left in the
+            # viewpoint... mouse movement seems to switch depending on
+            # viewing angle") - self._pan_x/y get applied via
+            # glTranslatef *before* the scene's own glRotatef(yaw,...)
+            # in paintGL's transform chain (translate happens first on
+            # the actual geometry, since OpenGL applies transforms in
+            # the reverse of call order), so the raw screen-space drag
+            # delta was being interpreted directly as a world-space
+            # offset with no yaw compensation at all - "left" only
+            # felt consistent from whatever one specific angle the
+            # camera happened to start at. Pre-rotating the screen
+            # delta by -yaw here exactly cancels the scene's own +yaw
+            # rotation once applied, keeping the net pan direction
+            # locked to actual screen-space regardless of viewing
+            # angle.
+            scale = self._dist * 0.002 * sens
+            screen_dx = dx * scale
+            screen_dy = -dy * scale
+            rad = math.radians(-self._yaw)
+            cos_a, sin_a = math.cos(rad), math.sin(rad)
+            self._pan_x += screen_dx * cos_a - screen_dy * sin_a
+            self._pan_y += screen_dx * sin_a + screen_dy * cos_a
         self._last_pos = event.pos(); self.update()
+
+        # LOD test mode (Aug 1 2026, per Keith's crash: "AttributeError:
+        # 'DFFViewport' object has no attribute 'set_lod_test_callback'"
+        # - the original LOD-test implementation only added this to
+        # MapViewport, but preview_widget (what the toggle actually
+        # wires up to) is a DFFViewport, a different class entirely
+        # with its own camera system - same feature, same callback
+        # pattern, added here too now).
+        callback = getattr(self, '_lod_test_callback', None)
+        if callback is not None:
+            ground_pos = self._screen_to_ground_position(event.pos().x(), event.pos().y())
+            if ground_pos is not None:
+                self.set_lod_test_center(ground_pos)
+                callback(ground_pos)
+
+    def _screen_to_ground_position(self, mx, my, ground_z=0.0): #vers 1
+        """Cast a ray from the camera through the given widget-space
+        pixel (via the already-existing _pick_ray, which replicates
+        paintGL's exact camera transform) and intersect it with the
+        horizontal plane z=ground_z - DFFViewport works in GTA's
+        native Z-up space directly (unlike MapViewport, which converts
+        to Y-up), so the ground plane is a fixed Z here rather than Y.
+        Returns None if the ray is parallel to the ground plane or
+        points away from it."""
+        ray = self._pick_ray(mx, my)
+        if ray is None:
+            return None
+        (ox, oy, oz), (dx, dy, dz) = ray
+        if abs(dz) < 1e-9:
+            return None
+        t = (ground_z - oz) / dz
+        if t < 0:
+            return None
+        return (ox + dx * t, oy + dy * t, oz + dz * t)
+
+    def set_lod_test_callback(self, callback): #vers 1
+        """Set (or clear, with None) the function called with the
+        current ground-position world point on every mouse move while
+        LOD test mode is active - mirrors MapViewport's identical
+        method (see its own docstring for the full feature context)."""
+        self._lod_test_callback = callback
+
+    def set_lod_test_center(self, world_pos): #vers 1
+        """Set (or clear, with None) the LOD test circle's center in
+        world space - mirrors MapViewport's identical method."""
+        self._lod_test_center = world_pos
+        self.update()
+
+    def _draw_lod_test_circle(self): #vers 1
+        """Draw a flat circle outline on the ground plane (z=center_z)
+        at self._lod_test_center, radius self._lod_test_radius -
+        mirrors MapViewport's identical method, adapted for this
+        class's native Z-up convention (circle drawn in the XY plane
+        here, XZ plane there)."""
+        if not OPENGL_AVAILABLE:
+            return
+        cx, cy, cz = self._lod_test_center
+        radius = getattr(self, '_lod_test_radius', 300.0)
+        segments = 64
+        glColor3f(0.2, 1.0, 0.3)
+        glLineWidth(2.0)
+        glPushMatrix()
+        glTranslatef(cx, cy, cz)
+        glBegin(GL_LINE_LOOP)
+        for i in range(segments):
+            angle = 2 * math.pi * i / segments
+            glVertex3f(radius * math.cos(angle), radius * math.sin(angle), 0.0)
+        glEnd()
+        glPopMatrix()
+        glLineWidth(1.0)
 
     def mouseReleaseEvent(self, event): #vers 1
         self._last_pos = event.pos()
@@ -1168,6 +1820,91 @@ class DFFViewport(QOpenGLWidget if OPENGL_AVAILABLE else QWidget):
                 self.resizeGL(self.width(), self.height())
             except Exception:
                 pass
+        self.update()
+
+    def keyPressEvent(self, event): #vers 1
+        """Arrow keys and numpad rotate the camera, held keys giving
+        continuous rotation - per Keith: "im thinking about adding
+        keyboard shortcuts, arrow keys, and numpad to rotate, but why
+        stop there, we could use the thumbsticks on a games
+        controller." A reliable alternative to right-click-drag
+        rotation regardless of whatever's causing the reported mouse-
+        button flakiness (middle-click pan and left-click-select both
+        "don't always work", right-click rotate "just fine" - couldn't
+        pin down a definitive code-level cause after reviewing the
+        button-matching logic; this sidesteps needing to for rotation
+        specifically, whatever the actual cause turns out to be).
+
+        Numpad keys detected via KeypadModifier specifically (Qt
+        doesn't otherwise distinguish a numpad "8" from a top-row "8"
+        by key code alone) so numpad and arrows can both be bound to
+        the same rotation without also hijacking normal typing/number
+        entry elsewhere in the app - this handler only ever fires
+        when the 3D viewport itself has keyboard focus, but scoping
+        the numpad detection this precisely still avoids any
+        surprises if that assumption is ever wrong somewhere.
+
+        Continuous rotation while a key is held (not one fixed step
+        per press) via a repeating QTimer, matching the smooth feel of
+        drag-based rotation rather than a discrete jump."""
+        key = event.key()
+        is_numpad = bool(event.modifiers() & Qt.KeyboardModifier.KeypadModifier)
+        rotate_keys = {
+            Qt.Key.Key_Left:  ('yaw', -1),
+            Qt.Key.Key_Right: ('yaw', 1),
+            Qt.Key.Key_Up:    ('pitch', -1),
+            Qt.Key.Key_Down:  ('pitch', 1),
+        }
+        if is_numpad:
+            rotate_keys.update({
+                Qt.Key.Key_4: ('yaw', -1),
+                Qt.Key.Key_6: ('yaw', 1),
+                Qt.Key.Key_8: ('pitch', -1),
+                Qt.Key.Key_2: ('pitch', 1),
+            })
+        if key in rotate_keys:
+            held = getattr(self, '_rotate_keys_held', None)
+            if held is None:
+                held = self._rotate_keys_held = {}
+            held[key] = rotate_keys[key]
+            self._ensure_rotate_key_timer()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event): #vers 1
+        held = getattr(self, '_rotate_keys_held', None)
+        if held is not None and event.key() in held and not event.isAutoRepeat():
+            del held[event.key()]
+        super().keyReleaseEvent(event)
+
+    def _ensure_rotate_key_timer(self): #vers 1
+        """Start the repeating rotation timer if it isn't already
+        running - stops itself automatically once no rotate keys are
+        held anymore, rather than running an idle timer permanently
+        for every viewport instance regardless of whether it's ever
+        used."""
+        timer = getattr(self, '_rotate_key_timer', None)
+        if timer is None:
+            from PyQt6.QtCore import QTimer
+            timer = self._rotate_key_timer = QTimer(self)
+            timer.timeout.connect(self._on_rotate_key_tick)
+        if not timer.isActive():
+            timer.start(16)   # ~60fps
+
+    def _on_rotate_key_tick(self): #vers 1
+        held = getattr(self, '_rotate_keys_held', None)
+        if not held:
+            timer = getattr(self, '_rotate_key_timer', None)
+            if timer is not None:
+                timer.stop()
+            return
+        sens = getattr(self, '_mouse_sensitivity', 1.0)
+        step = 2.0 * sens
+        for axis, direction in held.values():
+            if axis == 'yaw' and not self._view_locked:
+                self._yaw += step * direction
+            elif axis == 'pitch' and not self._view_locked:
+                self._pitch += step * direction
         self.update()
 
     # - Model Workshop compatibility methods

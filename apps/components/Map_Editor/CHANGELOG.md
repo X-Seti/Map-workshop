@@ -1,0 +1,3589 @@
+# Changelog
+
+History extracted from map_workshop.py's header comment block (moved
+out per Keith, Aug 1 2026, to keep the source file focused on code).
+
+## Origin (Model Workshop base, before the Map Workshop fork)
+
+- **Apr 2026** — Model Workshop (based on COL Workshop) created.
+  - [FIX] `_make_slot_pix` crash: imported `QPolygonF` into local scope.
+  - [FIX] Material Editor cube preview crash: added missing `QPolygonF`
+    import to `_open_dff_material_list` scope.
+  - [FIX] `_rebuild_grid` `QWidget` crash: removed redundant
+    `deleteLater` (`QScrollArea` auto-deletes old widget).
+  - [FIX] `_rebuild_grid` `QFrame` deletion crash: reparent slots
+    before scroll widget swap.
+- **May 8, 2026** — Model editor work.
+- **Jul 7, 2026** — Added 3ds Max-style 4-pane viewport (Top/Front/
+  Side/Perspective) via `QStackedWidget` central widget; user-assignable
+  per pane by right-click; splitter-resizable; layout persists to
+  `model_workshop.json`.
+- **Jul 11, 2026** — Diagnostic rollback to pre-4-pane state then
+  restored: black-window/`QOpenGLWidget` context failure confirmed via
+  `journalctl` to be a hardware/driver issue (PCIe BadTLP errors +
+  NVIDIA GSP firmware load failure on the GPU, starting Jul 10) - not
+  caused by this file or `dff_viewport.py`. The `QT_QPA_PLATFORM=xcb` /
+  `QSG_RHI_BACKEND=opengl` forcing in this file doesn't help since the
+  GPU itself is failing at the hardware level.
+
+## Map Workshop fork (from here on, this file is Map Workshop, not Model Workshop)
+
+See `map_workshop_old.py` in this same folder for the full, detailed
+history of the Map Workshop port from `map_workshop_old_version.py`
+(Object Browser, Instance List, Control Panel, Editing Panel,
+World Viewport, ribbon framework, the dock/ribbon snap-drag
+investigation, etc.) - that file carries its own extensive dated
+header covering all of that work.
+
+This copy of `map_workshop.py` (the current, active one) started as a
+fresh copy of `model_workshop.py` (Aug 1, 2026), with Map Workshop's
+real content (Object Browser, IPL Inst File, Control Panel docks)
+grafted in piece by piece, since Model Workshop's own dock/ribbon
+snapping was confirmed working live while the evolved `map_workshop.py`
+fork's was not, and the exact cause of that regression was never
+conclusively found despite extensive isolated testing.
+
+- **Aug 1, 2026** — Grafted Object Browser, IPL Inst File, Control
+  Panel docks in; fixed dock-wrapping parity issues; found and fixed
+  the actual docking regression (a mix of `dock.setFeatures()`,
+  `installEventFilter`, and other factors - see git history for the
+  full investigation); tidied up Control Panel's layout (18px controls,
+  grouped sections); fixed Object Browser's width lock (a
+  `QStackedWidget` sizing itself to its largest page - the merged IMG
+  tab - regardless of which page was visible); renamed all "Model
+  Workshop" labels to "Map Workshop"; added collapsible sections to
+  the IMG/IDE/IPL/DAT tabs inside Object Browser (double-click each
+  tab's bold title label to collapse/restore its content, matching
+  the same interaction already used for dock title bars); fixed 18px
+  text clipping and added icon-only collapse (wired to live resize)
+  for every action-button row across all 4 tabs (Edit/Save,
+  Open/Close/New/Delete, Extract/Add/Del/Rename/Rebuild), via a new
+  general-purpose `_register_collapsible_button_row` helper; fixed a
+  follow-up bug where switching to a tab (e.g. IMG) didn't re-check
+  its row's collapse state, since a `QStackedWidget` page that isn't
+  current doesn't reliably react to resize events while hidden -
+  `_on_object_browser_tab_changed` now force-refreshes the newly
+  shown tab's row right away.
+
+- **Aug 1, 2026 (cont'd)** — Fixed an `ImportError` when opening Map
+  Workshop from IMG Factory's DAT Browser (`open_map_workshop` didn't
+  exist, only `open_model_workshop` did) by adding it as an alias.
+  Extended the "Open" button's file dialog to also accept a GTA
+  game's main `.dat` file, routing it through the already-working
+  `_load_game_dat_file` (map-loading) logic instead of adding a
+  separate button - the actual file-import logic
+  (`_load_game_folder`, `_load_game_dat_file`, `_apply_loaded_world`,
+  `_load_selected_ipls_with_log`, etc.) already existed from the
+  earlier graft, just wasn't wired to any visible UI element yet.
+  Found and fixed a second gap: `open_model_workshop`/
+  `open_map_workshop` itself (the entry point actually called when
+  opening with a specific file path, e.g. from the DAT Browser) only
+  routed `.dff`/`.col`/`.img` extensions, never `.dat` - added that
+  routing too. Verified the full chain end-to-end (with `QMessageBox`
+  mocked to avoid blocking modal dialogs in headless testing):
+  `open_map_workshop(main_window, "some.dat")` -> `_load_game_dat_file`
+  -> `GTAWorldLoader.load_from_dat` -> `_apply_loaded_world` -> the
+  entire UI population chain (Object Browser, IPL Sections, Instance
+  List, IDE/DAT/IMG tabs, IPL Inst File panel) all ran without
+  crashing, and the per-IPL lazy-load path
+  (`_on_ipl_section_cell_clicked` -> `_ensure_ipl_loaded`) was
+  confirmed intact and complete. World Viewport panes intentionally
+  not wired in for this pass, per Keith - keeping Model Workshop's
+  existing DFF viewport, data-only (Object Browser/IPL Sections/etc.)
+  is enough for now.
+
+- **Aug 1, 2026 (cont'd)** — Fixed a "weird cycling loop" Keith found
+  when actually loading real IPLs live (screenshot confirmed real
+  parsed instance data showing correctly in the IPL Inst File panel -
+  the core load chain does work). Root cause:
+  `_ensure_ipl_loaded`'s own `_preload_world_assets` shows a
+  `QProgressDialog` whose `setValue()` calls `processEvents()`
+  internally to keep the UI responsive; with `setMinimumDuration(500)`,
+  that dialog often never actually becomes visible/modal for a fast
+  preload (few models), so `processEvents()` still pumps the event
+  queue with no real modal blocking in effect - a queued duplicate
+  click event could re-enter `_on_ipl_section_cell_clicked` mid-flight,
+  before the first call finished toggling visibility state, producing
+  repeated/cycling behaviour. Added a simple re-entrancy guard
+  (`self._ipl_cell_click_in_progress`) around the whole method.
+
+
+- **Aug 1, 2026 (cont'd)** — Fixed a second, deeper bug in the same
+  area: `open_map_workshop` was just `= open_model_workshop` (a plain
+  alias) - fixed the `ImportError`, but the actual caller
+  (`apps/components/Img_Factory/imgfactory.py`'s
+  `open_map_workshop_docked`) calls
+  `open_map_workshop(self, game_root=game_root, dat_path=dat_path)`,
+  keyword arguments `open_model_workshop`'s own signature
+  (`dff_path`/`original_dff_name`) doesn't accept at all - so the
+  alias still failed, now with `got an unexpected keyword argument
+  'game_root'`. Replaced the alias with a real, separate
+  `open_map_workshop(main_window, game_root=None, dat_path=None)`
+  implementation - docks/opens a `ModelWorkshop` the same way
+  `open_model_workshop` does, then routes to `_load_game_folder` or
+  `_load_game_dat_file` depending on which argument was given.
+  Verified against the exact call signature `imgfactory.py` uses
+  (keyword args, both the `dat_path` and no-args cases confirmed
+  working end-to-end).
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's question ("are there
+  functions missing that we still need to add, not counting the
+  viewport, as we're using the existing instead, can you change the
+  functions needed... to use the viewport"): ran a systematic audit
+  (AST-based - every `self.method()` call in the `ModelWorkshop`
+  class checked against every method actually defined on it) rather
+  than guessing. First confirmed every `self._world_panes` reference
+  (the deliberately-unused Map-specific viewport) is safely
+  `getattr`-guarded - all silently no-op, nothing crashes from not
+  using it. Then found two genuinely missing methods in active code
+  paths for the viewport we ARE using: `_get_ui_color` (called 20+
+  times throughout `ModelWorkshop`'s own DFF-viewport painting code,
+  but only ever defined on `COL3DViewport`, a different class this
+  one doesn't inherit from - every call would have raised
+  `AttributeError` the moment any painting happened) and
+  `_set_render_mode` (Control Panel's Wireframe Mode toggle called
+  this, but it never existed anywhere - `DFFViewport.set_render_mode`
+  does exist though, on the actual viewport widget
+  (`self.preview_widget`), so added a thin delegating method). Both
+  added and verified working. Ten other "missing" methods found by
+  the same audit are all either safely guarded, only referenced in
+  already-parked/unused code, or gated behind explicit clicks on
+  Model-Workshop-specific features (COL level import/export, icon
+  display mode, platform scanning) unrelated to Map Workshop's
+  loading functionality - pre-existing gaps in the base app, not
+  addressed here.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: the right-click/
+  Panels menu correctly showed tick marks for every dock, but
+  clicking an item didn't actually toggle it ("right click pane
+  selection not working"). Root cause: this is the exact same
+  regression found and fixed earlier in the session
+  (`toggleViewAction()` requires `DockWidgetClosable` to be enabled -
+  without it, Qt disables the action entirely, so it shows correctly
+  but does nothing when clicked) - it came back when
+  `DockWidgetClosable` was later deliberately removed from every
+  dock's `setFeatures()` call during the snap-drag debugging (for
+  parity with Model Workshop's own docks, which also lack it).
+  Verified empirically with a minimal isolated test:
+  `toggleViewAction().isEnabled()` is `False` without
+  `DockWidgetClosable`, `True` with it. Since `DockWidgetClosable`
+  was already conclusively ruled out as a cause of the snap-drag
+  issue (compared directly against Model Workshop, which also lacks
+  it and still drags/snaps fine), adding it back is safe. Added
+  `DockWidgetClosable` back to all 9 active docks (Files/Models/
+  Frame Hierarchy/Textures/Object Browser/Instance List/IPL Inst
+  File/Editing Panel/World View). Left Control Panel's `setFeatures()`
+  call (still commented out) untouched - since it's never called,
+  it already gets Qt's full default feature set including
+  `DockWidgetClosable` automatically.
+
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "the panel list with the tick
+  marks to indicate the loaded panes needs work, I should be able to
+  hide panels." The View menu already existed (Menu button -> View)
+  but only had a "Sort" action - close_btn's tooltip on every dock's
+  collapsible title bar promises "use the View menu... to bring it
+  back", but there was nothing there to back that up. Added a
+  "Panels" submenu under View, dynamically listing every dock
+  currently on `_outer_mw` (via `findChildren(QDockWidget)`,
+  alphabetically sorted) with its own `toggleViewAction()` - Qt's
+  standard built-in mechanism for exactly this (checkable, shows a
+  tick mark for visible panels, click to hide/show). Automatically
+  reflects whatever docks exist at the time, including Control Panel
+  once it's re-enabled.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "need to save unticked
+  panes." `_restore_outer_layout` had a leftover safety net that
+  unconditionally force-showed Files/Models/Frame Hierarchy/Textures
+  on every startup, regardless of what was actually saved -
+  overriding a hidden dock's state right after `restoreState()`
+  correctly restored it. Removed the force-visible block entirely
+  (kept the unrelated window-width clamp logic below it) - Qt's own
+  `restoreState()` already correctly restores each dock's saved
+  visibility on its own, no manual re-application needed. Verified
+  end-to-end: hid Object Browser, called `_save_outer_layout()`,
+  created a fresh `ModelWorkshop` instance, let its delayed restore
+  timer fire, confirmed Object Browser was still hidden (both
+  `isVisible()` and the toggle action's checked state).
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "wire every pane into the
+  viewport, when I load ipl, these dont show" - a full multi-instance
+  3D world view (confirmed scope, not just single-selection preview).
+  `DFFViewport` only ever supported showing one model at a time
+  (`set_current_model`); `_draw_assembly`'s multi-geometry path draws
+  everything at one shared origin (for a single DFF's assembled
+  parts, not positioned world objects). Added real multi-instance
+  support to `apps/methods/dff_viewport.py`: `set_world_instances()`
+  / `clear_world_instances()` store a list of per-instance geometry +
+  transform dicts; `_draw_world_instances()` applies its own
+  `glPushMatrix`/`glTranslatef`/quaternion rotation (via
+  `glMultMatrixf` and a new `_quat_to_gl_matrix` helper, verified
+  mathematically correct against known identity and 90°-rotation
+  cases) / `glScalef`/`glPopMatrix` per instance, reusing the
+  existing `_draw_wireframe`/`_draw_solid`/`_draw_textured` draw
+  calls via the same temp-swap trick `_draw_assembly` already uses;
+  `_auto_fit_world()` frames the camera across every instance's
+  position (map-scale, not vertex-level detail); `paintGL` checks for
+  world instances first. Added `ModelWorkshop._refresh_world_view()`
+  (`map_workshop.py`) - converts each distinct model's cached
+  `DFFModel` geometry (`self._model_cache.get_geometry`, already
+  loaded by `_preload_world_assets` when an IPL loads) into the
+  entry format once, reused across every instance sharing that
+  model, then hands the whole list to
+  `preview_widget.set_world_instances()`. Wired into both
+  `_apply_ipl_visibility_filter` (covers every existing
+  toggle/LOD-change call site) and `_apply_loaded_world` (the
+  initial-load path, which built its own visible-instance list
+  separately). Verified end-to-end with mock instance/geometry data:
+  correct conversion, correct camera auto-fit distance, and a
+  missing/unparseable model correctly skipped rather than crashing.
+  Could not verify actual live OpenGL rendering or GTA-specific
+  rotation/coordinate conventions (PyOpenGL isn't installed in this
+  environment) - needs Keith's visual confirmation with real data
+  once pulled.
+
+- **Aug 1, 2026 (cont'd)** — Keith confirmed the multi-instance world
+  view works live with real data (screenshot: a real wireframe map
+  rendering), but reported bottlenecking when interacting with the
+  viewport (rotating/panning during drag), and asked for the loaded
+  IPL's models to show in the Models dock with textures shown below
+  on selection.
+
+  Performance fix (`apps/methods/dff_viewport.py`): every triangle of
+  every instance was being fully re-executed via immediate-mode
+  OpenGL (`glBegin`/`glVertex` in a Python loop) on every single
+  repaint, including every frame during an interactive camera drag.
+  Added a display-list cache (`self._world_display_lists`, keyed by
+  `(model_key, render mode)`) - each distinct model's geometry is
+  compiled into a GL display list once, then every instance of it
+  (however many share that model) just replays the pre-compiled list
+  (`glCallList`) - the expensive per-triangle Python/GL work now only
+  happens once per model per mode, not once per instance per frame.
+  `set_world_instances`/`clear_world_instances` discard old lists
+  when replacing the world, freeing GPU memory rather than growing
+  the cache across every load. `ModelWorkshop._refresh_world_view`
+  now tags each entry with `model_key` (the model name) so instances
+  sharing a model correctly share one compiled list.
+
+  Models/Textures panel wiring (`map_workshop.py`): added
+  `_populate_models_panel_from_ipl` (lists every distinct model
+  referenced by the currently visible instances in the existing
+  Models dock's table, one row per model with an instance count) and
+  `_on_ipl_model_row_selected` (shows that model's Model Name/IDE/
+  ID/TXD info and its actual textures - name/size/format - in the
+  Textures dock, pulled from the same `model_cache` already loading
+  geometry). Routes through the existing selection handler
+  (`_on_compact_col_selected`) via a new `self._ipl_models_mode`
+  flag, checked first so the existing DFF/COL browsing behaviour is
+  untouched when not in this mode. Both wired into the same
+  `_refresh_world_view` call site as the viewport update, so the
+  Models panel and viewport always stay in sync.
+
+  Verified end-to-end with mock data: display-list grouping confirmed
+  (50 instances of one model correctly share a single `model_key`);
+  Models panel population confirmed (2 distinct models -> 2 rows,
+  correct instance counts); selection flow confirmed (selecting a
+  row correctly updates Model Name/TXD fields and populates the
+  Textures table with the right name/size/format, texture count
+  label updates too). Full `QApplication` instantiation clean,
+  `ast.parse` clean on both files. Could not verify actual live
+  OpenGL display-list performance (no PyOpenGL in this environment) -
+  needs Keith's confirmation that dragging feels smoother once
+  pulled.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith, using real GTA SOL IPL data
+  as reference (SA data converted to VC's format across all cities):
+  "We need to change how the IPL inst at displayed in the IPL panel
+  ... The IPL would need to be in a cells table, so we can highlight
+  what we want to change, rename, prefix, suffix names, move X, Y, Z
+  cords in batches to any location." Converted the IPL Inst File
+  panel from a plain read-only `QTextEdit` to an editable
+  `QTableWidget` - one row per instance line, 13 columns (ID/Model/
+  Interior/Pos X,Y,Z/Scale X,Y,Z/Rot X,Y,Z,W), multi-selectable
+  (`ExtendedSelection`), foundation for the batch rename/prefix/
+  suffix/move operations still to come. Cell edits are currently
+  display-only - nothing writes back to the actual `.ipl` file yet
+  (no write-back infrastructure exists for any file type in Map
+  Workshop, a known, already-documented gap - see TODO.md).
+
+  Also added an "Ignore Scaling" checkbox: some converted IPLs (his
+  GTA SOL example - SA data converted to VC's format) have a broken/
+  placeholder `(0,0,0)` scale in the Scale columns instead of the
+  normal `(1,1,1)` unit scale his VC/LC data correctly shows.
+  Checking it treats a `(1,1,1)` scale as equivalent to `(0,0,0)` for
+  interpretation purposes only - confirmed with Keith this should
+  never write anything back to the file ("leaving the ipl
+  untouched").
+
+  Verified end-to-end with Keith's own real example data (a
+  temporary IPL file built from his `vgncarshow1`/`man_backside`
+  lines): correct 13-field parsing, correct row count, and confirmed
+  the Ignore Scaling toggle only affects cells that actually show
+  `1` (the SA-converted row's already-`0,0,0` scale stayed
+  untouched, the VC row's `1,1,1` correctly became `0,0,0`). Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's larger multi-part request
+  (using real GTA SOL IPL data, plus reference screenshots of a
+  MooMapper-style "Item Editor Dialog"): implemented the first,
+  lower-risk subset this pass -
+
+  1. INST/CULL/ZON/PATH replaced the vertical `QRadioButton` list
+     with compact horizontal buttons + tooltips ("This needs to be
+     buttons under IPL sections... with tooltips showing a
+     description").
+  2. Right-click context menu on the IPL Inst File table: Copy
+     (selected cells, tab-separated) and Copy Row(s) as IPL line(s)
+     (comma-separated, matching the real file format) to the
+     clipboard - "have right-click options to copy to the clipboard;
+     we can start to add editing options."
+  3. Double-clicking a Model cell in the IPL Inst File table now
+     finds the matching real instance, centres the actual active
+     viewport (`self.preview_widget`) on it via a new
+     `_center_viewport_on_instance`, and opens the existing (already-
+     ported) `_InstanceEditPanel` via `_center_on_instance` - "Clicking
+     on the model name in IPL Inst File brings up the model in the
+     viewport and shows the Object Editor Dialogue." `_center_on_
+     instance` previously only updated the unused `_world_panes`
+     (this build uses Model Workshop's own DFF viewport instead, per
+     an earlier decision), so it never visibly did anything here
+     until now.
+
+  While wiring #3, found and fixed two real, pre-existing bugs that
+  would have crashed `_InstanceEditPanel` (comprehensive, already-
+  ported code - Identity/IDE Info/Position+Rotation nudge controls/
+  2DFX/TOBJ sections) the moment it was ever actually used, entirely
+  unrelated to anything built today: `QGridLayout` was never imported
+  at module level, and `quat_to_euler_degrees`/`euler_degrees_to_quat`
+  (used to present an instance's quaternion rotation as editable X/Y/Z
+  degrees) were referenced but never defined anywhere - ported both
+  from `map_workshop_old_version.py`, where they'd always existed.
+
+  Verified end-to-end with Keith's own real example data (a real
+  `IPLInstance` for `vgncarshow1`): double-click correctly finds the
+  instance, centres the viewport (`pan_x`/`pan_y` computed correctly),
+  and opens a genuinely visible edit panel - confirming both new bugs
+  are now fixed and the whole chain works.
+
+  Deferred to a follow-up pass (each a substantial feature on its
+  own): double-click picking objects directly in the 3D viewport
+  (needs real 3D ray-casting against world instances, not built
+  yet); double-click a model in the Models dock jumping to it in the
+  viewport; merging the Models panel into IPL Inst File; a texture
+  tile view (matching TXD Workshop's style) plus a "Show model
+  textures" button in the edit panel; actually binding/rendering
+  textures on models in the viewport (currently untextured
+  wireframe/solid only); a Validation checklist section in the edit
+  panel matching the reference dialog image; and the VC/LC IPL
+  display issue, which Keith asked to address last since the above
+  changes might resolve it as a side effect.
+
+- **Aug 1, 2026 (cont'd)** — Confirmed by Keith testing against a
+  real copy of the PC version of Vice City: the multi-instance 3D
+  world view renders objects correctly. **Works on PC version of
+  Vice City.**
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "lets start implementing
+  functions like textures on models and texture tiles, shown in
+  texture pane." Two related pieces -
+
+  Texture tiles: the Textures dock's table (`self._tex_list`) had
+  already been built with `setIconSize(QSize(32,32))` and a 56px-wide
+  thumbnail column ready to go, but was never actually populated with
+  real thumbnails - `_on_ipl_model_row_selected` only ever set an
+  empty string item there. Added `_create_texture_thumbnail`
+  (`map_workshop.py`), reusing the exact same approach as TXD
+  Workshop's own `_create_thumbnail` ("the same way as in TXD
+  workshop") - `model_cache.get_textures()` already returns fully
+  decoded `rgba_data` (`parse_txd` handles DXT1/DXT3/DXT5/etc.
+  decompression itself), so this just builds/scales a `QPixmap` from
+  it, no extra decoding needed. Set as each row's `DecorationRole`.
+
+  Textures on models in the viewport: per Keith, "we need to load the
+  textures with the models in the viewport." `DFFViewport._draw_
+  textured()` already existed (used for regular single-model preview)
+  and looks up textures via a single shared `self._tex_ids` dict
+  (texture name -> GL id) - not per-model, so for a whole world of
+  different models each needing their own textures, every texture any
+  model might need has to be uploaded into that dict before any
+  model's display list gets built (the bound texture id is baked into
+  the list at compile time). Extended `ModelWorkshop._refresh_world_
+  view` to, for each distinct model, look up its TXD via its IDE
+  object (same lookup `_on_ipl_model_row_selected` already does),
+  fetch its textures from the same `model_cache` already loading
+  geometry, collect them all (de-duplicated by TXD), and upload the
+  whole batch via `preview_widget._upload_textures()` before pushing
+  the world instances - also switches the viewport to `'textured'`
+  render mode so `_draw_world_instances` actually uses this path.
+
+  Verified end-to-end with mock data: thumbnail creation confirmed
+  (4x4 and 8x8 synthetic RGBA images correctly scaled to 32x32);
+  full `_on_ipl_model_row_selected` flow confirmed populating a real
+  thumbnail alongside name/size/format; full `_refresh_world_view`
+  flow confirmed correct texture de-duplication (2 instances sharing
+  one model -> exactly 1 texture upload, not 2), correct render-mode
+  switch to `'textured'`, correct instance count pushed. Full
+  `QApplication` instantiation clean, `ast.parse` clean. Could not
+  verify actual live OpenGL texture binding (no PyOpenGL in this
+  environment) - needs Keith's visual confirmation with real data.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "the INST CULL ZON PATH
+  buttons need to be in there own pane, with [ignore scaling]
+  [Generic.txd] [LOD view] the [LOD view] button has 3 toggles,
+  [Show All] [Show Norm] [Show LOD] the Generic.txd button should
+  load the generic.txd from gta3.img and root/models/generic.txd" -
+  confirmed with Keith as a brand new, separate dock (own title bar,
+  dockable/movable like every other one), not folded into IPL Inst
+  File or Object Browser where these pieces previously lived.
+
+  Added `_create_ipl_controls_dock`: Row 1 is INST/CULL/ZON/PATH
+  (moved out of the IPL tab); Row 2 is Ignore Scaling (moved out of
+  IPL Inst File), Generic.txd, and LOD view. LOD view maps directly
+  onto already-existing, already-working logic
+  (`_set_lod_display_mode`) - Show All = `'both'`, Show Norm =
+  `'normal'`, Show LOD = `'lod'` - just needed a 3-way toggle menu
+  wired to it. Generic.txd tries `model_cache.get_textures('generic')`
+  first (which searches every indexed IMG archive - `gta3.img` is
+  always auto-indexed for every game, per `GTAWorldLoader.load()`'s
+  own docstring: "Always enforces models/gta3.img... so TXD Workshop
+  and the Dump TXDs feature can always find it"), confirmed by Keith
+  as the right order, then falls back to `{game root}/models/
+  generic.txd` as a loose file (parsed directly via `parse_txd`) if
+  not found there - `self._game_root` was already tracked from
+  earlier loading code, reused rather than re-derived.
+
+  Hit and fixed two mistakes made while extracting this code from its
+  old locations: the method definition line for
+  `_create_ipl_inst_file_panel` was accidentally dropped during the
+  edit that removed its Ignore Scaling checkbox (caught immediately
+  by the next instantiation test - `AttributeError: no attribute
+  '_create_ipl_inst_file_panel'`); and `QButtonGroup` needed a local
+  import in the new method (not available at module level, matching
+  the existing pattern elsewhere in this file).
+
+  Verified end-to-end: all 6 docks (Models/Frame Hierarchy/Textures/
+  Object Browser/IPL Inst File/IPL Controls) present via
+  `createPopupMenu()`; INST/CULL/ZON/PATH buttons and Ignore Scaling
+  checkbox both confirmed present in the new dock; Generic.txd tested
+  both paths (found via a fake IMG-search model_cache, and the
+  fallback-to-loose-file path with a real temp file on disk, correctly
+  handling a parse failure without crashing); LOD view menu confirmed
+  correct initial state (Show Norm checked, matching the default) and
+  correct behaviour on trigger (`Show All` -> `self._lod_display_mode
+  == 'both'`). Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "when selecting the IDE tab,
+  the IPL inst file, turns into IDE Objects, and displays the IDE
+  entries in cells just like the IPLs." Added `self._ipl_inst_file_
+  mode` ('ipl'/'ide') to `_on_object_browser_tab_changed`: selecting
+  the IDE tab now updates the shared IPL Inst File dock's visible
+  title to "IDE Objects" (needed exposing the custom title bar's
+  `QLabel` as `dock._title_label` in `_make_dock_collapsible`, since
+  it was only ever set once at construction and never stored
+  anywhere reachable) and shows whichever IDE file is currently
+  selected in the IDE tab's own list; selecting any other tab
+  switches back to "IPL Inst File" and restores the normal IPL
+  Sections view (also restoring the table's fixed 13-column schema,
+  since IDE mode changes the column count dynamically).
+
+  Added `_refresh_ide_objects_panel`: unlike IPL's INST/CULL/ZONE
+  (each always exactly 13 fields), IDE has several different section
+  types (objs/tobj/cars/peds/anim/weap/txdp/2dfx/hier, etc.) with
+  genuinely different field counts each - rather than building a
+  separate fixed schema per section type, every real data line
+  becomes its own row with however many comma-separated fields it
+  actually has, columns numbered ("Field 1", "Field 2", ...) up to
+  the widest row found across the whole file. Section header lines
+  and "end" are skipped using the same detection the real IDE parser
+  itself uses (`DATParser.parse_ide` - any short comma-free lowercase
+  token). `_on_ide_tab_row_clicked` now also triggers this refresh
+  when IDE Objects mode is active, matching how clicking an IPL
+  Sections row already refreshes IPL Inst File.
+
+  Verified end-to-end with a real mixed-section test IDE file (two
+  `objs` entries plus one `tobj` entry): title correctly switches to
+  "IDE Objects"; column count correctly comes out as 7 (matching the
+  widest row, the 7-field `tobj` entry); all 3 rows correctly parsed
+  with section headers/`end` correctly skipped and shorter rows
+  correctly padded with empty cells; switching back to IPL mode
+  correctly restores both the title and the fixed 13-column schema.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: "IPL secton
+  buttons are a perfect size so the IPL control buttons need to be
+  the same size." The IPL Controls dock's buttons (INST/CULL/ZON/
+  PATH, Ignore Scaling, Generic.txd, LOD view) had been built without
+  the 18px compact-button treatment (`setFixedHeight(18)` + the
+  padding-stripped stylesheet) already applied everywhere else -
+  IPL Sections' Open/Close/New/Delete, Control Panel, all four tabs'
+  action rows. Applied the same treatment to all 6 IPL Controls
+  buttons/checkbox, matching exactly. Verified: every button in the
+  dock confirmed `height() == 18`.
+
+- **Aug 1, 2026 (cont'd)** — Confirmed by Keith: the multi-instance
+  world view now renders real Vice City docks geometry with textures
+  correctly (screenshot showed cranes, containers, buildings all
+  textured properly). Per Keith: "im trying to select a tree double
+  clicking on it, so I can see its edit dialog window" - implemented
+  double-click-to-select directly in the 3D viewport, the deferred
+  item from earlier in the session.
+
+  `apps/methods/dff_viewport.py` already had a complete, working
+  ray-picking toolkit built for vertex/edge picking in single-model
+  editing mode (`_pick_ray` - unprojects a screen pixel to a world-
+  space ray via `gluUnProject`, using the exact same camera transform
+  `paintGL` uses; `_closest_point_on_ray`; even a full Möller–Trumbore
+  `_ray_triangle_intersect` for later if needed) - all directly
+  reusable rather than building picking from scratch. Added
+  `_pick_world_instance(mx, my)`, following the same pattern as the
+  existing `_pick_vertex`/`_pick_edge`: finds the closest world
+  instance's *position* to the ray within a camera-distance-scaled
+  tolerance (not full per-triangle mesh intersection - re-testing
+  every triangle of every instance on every click would be
+  considerably slower across a whole loaded map; distance-to-origin
+  is fast and good enough for clicking roughly on/near an object).
+  Added `mouseDoubleClickEvent`, calling `_workshop_ref._on_world_
+  instance_picked(index)` (the viewport already carries `_workshop_ref`
+  back to `ModelWorkshop`, set at construction) when a world view is
+  loaded and something was picked.
+
+  `ModelWorkshop._refresh_world_view` now also carries each entry's
+  original `IPLInstance` (`entry['instance']`), needed to map a picked
+  index back to something `_center_on_instance`/`_show_instance_edit_
+  panel` can actually use. Added `_on_world_instance_picked`, reusing
+  the exact same centering + edit-panel flow the IPL Inst File table's
+  own double-click already uses - one consistent way to select and
+  inspect an instance regardless of which panel you click it from.
+
+  Verified end-to-end: the ray-math selection logic itself confirmed
+  correct (a ray pointing straight down onto two candidate positions
+  correctly picked the one it was aimed at); the full picked-index ->
+  real `IPLInstance` -> centering + edit panel chain confirmed working
+  with a real `IPLInstance` (viewport pan correctly computed, edit
+  panel confirmed genuinely visible); an out-of-range index confirmed
+  handled safely without crashing. Could not test the actual
+  `gluUnProject` ray generation itself (needs a real OpenGL context,
+  not available in this sandbox) - but that's pre-existing,
+  already-proven code being reused here, not new. Full `QApplication`
+  instantiation clean, `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "When selecting the object, it
+  takes me to the object, which is good, but the zoom in is too
+  strong, I have to zoom out alot to see the object, maybe in time we
+  need a setting for pick [goto] and zoom values, add todo." Bumped
+  the default go-to-instance zoom distance from 15 to 40 as a better
+  default for now; added the proper user-configurable pick/goto zoom
+  setting to TODO.md, along with two other items from the same
+  message that need real design work before building: a snap
+  function and a smooth-mesh function ("the biggest problem sometimes
+  with making models is sometimes there are gaps, so we need a snap
+  function, and a smooth mesh function").
+
+  Also per Keith: "more important when selecting and viewing a single
+  object, this should be highlighted in the IPL Inst file list."
+  Added `_sync_ipl_inst_file_selection`, called from `_on_world_
+  instance_picked` - matches the picked instance's `source_ipl`
+  against IPL Sections' rows (switching to and refreshing the right
+  IPL first if it's not the one currently shown), then finds and
+  highlights the matching row in the IPL Inst File table itself
+  (matched by ID + Model name, `scrollToItem`'d into view too).
+
+  Extended the IPL Inst File table's right-click menu (previously
+  just Copy/Copy Row(s)) with Info (opens the same edit panel double-
+  clicking the Model cell already does) and Show Textures (loads that
+  row's model's textures into the Textures dock, reusing the exact
+  logic `_on_ipl_model_row_selected` already has). Factored the row ->
+  real `IPLInstance` lookup out into a shared `_find_instance_for_ipl_
+  inst_file_row`, now used by both the context menu and the existing
+  double-click handler (previously duplicated inline). Two more menu
+  items Keith asked for - "load into model workshop" and "edit the
+  model in map editor" - need their exact intended behaviour
+  clarified before building (tracked in TODO.md); Info and Show
+  Textures were unambiguous enough to add directly.
+
+  Verified end-to-end: row-highlighting confirmed both for the
+  same-IPL case (row correctly selected) and the cross-IPL case
+  (IPL Sections correctly switches to the instance's actual source
+  IPL first); the shared instance-lookup helper confirmed returning
+  the right instance; Show Textures confirmed populating the Textures
+  dock correctly (thumbnail, name, size, format, count label) via the
+  context-menu path. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot (the Object Editor
+  Dialog working well, showing real comprehensive data - Identity,
+  IDE Info, Position/Rotation with nudge controls, Placement Info,
+  2DFX Effects, TOBJ): "When loading the ipls, we also need to
+  preload the generic textures first, as these appear white in the
+  game ipls, the object exists in gta3.img with everything else."
+
+  His own screenshot's Identity panel confirmed the actual cause:
+  `veg_palm04`'s own `Texture (TXD): generic` - but
+  `_refresh_world_view`'s automatic per-model texture lookup only
+  ever called `model_cache.get_textures(txd_name)` directly (a plain
+  IMG-index lookup), without the same IMG-then-loose-file fallback
+  the "Generic.txd" button already had (`_get_generic_textures`,
+  factored out of `_on_load_generic_txd_clicked` for reuse) - so
+  objects whose TXD is specifically "generic" could end up with no
+  textures at all if the plain lookup didn't find it, rendering
+  white. Fixed two ways: `_refresh_world_view` now unconditionally
+  preloads generic.txd first (before the per-model loop), and any
+  per-model TXD lookup that's specifically "generic" (case-
+  insensitive) reuses the same already-fetched, robust-fallback
+  textures instead of a second plain lookup.
+
+  Also per Keith's screenshot: "the buttons in the object info, the
+  buttons need to be the same size as the others, like Zon, Cull, and
+  so on, all buttons should be uniform." The Item Editor Dialog's
+  nudge buttons (the chevron `«` `<` `>` `»` icons for Position/
+  Rotation) and its Prev/Next/Close buttons had no fixed height set
+  at all, defaulting to Qt's larger natural button size. Applied the
+  same 18px `setFixedHeight` used everywhere else in the app.
+
+  Verified end-to-end: with a mock `model_cache` where the plain
+  per-model "generic" lookup deliberately fails (simulating the real
+  bug), confirmed the texture still gets uploaded correctly via the
+  unconditional preload, with no duplicate upload; confirmed every
+  button in the Item Editor Dialog (14 nudge buttons plus Close)
+  reports `height() == 18`. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "its not just generic.txd,
+  there are other texture files needed; these are found in
+  generic.ide thats called from gta_vc.dat... IDE DATA\MAPS\generic.IDE
+  loads those textures into memory... so we'll be looking for
+  mine.txd metal.txd, dynphn.txd, dynbarrels.txd, woodpanels.txd,
+  boxes.txd and every other texture listed in the .ide... some of
+  those names repeat, but we only need 1 of each." The earlier fix
+  only special-cased literally "generic.txd" - the real issue was
+  broader: any of generic.ide's other referenced TXDs could have the
+  same "plain IMG-index lookup alone doesn't always find it" problem.
+
+  Generalized `_get_generic_textures` into
+  `_get_txd_textures_with_fallback(txd_name)` (works for any TXD
+  name, not just "generic"), keeping the old name as a thin wrapper
+  for the button. Added `_preload_generic_ide_textures`, which finds
+  every `IDEObject` whose `source_ide` basename is `generic.ide`
+  (case-insensitive), collects the distinct set of their `txd_name`s
+  (deduplicated - many objects share one TXD, e.g. `bollard`/
+  `bollardlight` both use `metal`), and fetches all of them via the
+  robust fallback helper. `_refresh_world_view` now calls this
+  unconditionally first (replacing the old generic-only preload), and
+  also uses the robust fallback (not a plain `model_cache.get_
+  textures()` call) for every other model's own TXD lookup too, since
+  the underlying issue isn't specific to generic.ide.
+
+  Cached (`_generic_ide_textures_cache`, keyed by `id(loader)`) since
+  `_refresh_world_view` calls this on every single visibility toggle
+  and generic.ide's own content doesn't change during a session -
+  recomputing (re-iterating every loaded IDE object, re-fetching each
+  TXD) every time would have been wasted, repeated work.
+
+  Verified end-to-end with Keith's own example data (a mock built
+  from his actual generic.ide excerpt - `mine`/`bollard`/
+  `bollardlight`/`barrel1`/`barrel2`, plus one `downtown.ide` object
+  as a negative control): correctly fetched exactly 3 distinct TXDs
+  (`mine`, `metal`, `dynbarrels` - `metal` and `dynbarrels` each only
+  fetched once despite 2 objects sharing them), correctly excluded
+  the `downtown.ide` object's `citytxd`; full `_refresh_world_view`
+  flow confirmed no duplicate upload after fixing an off-by-mistake
+  in the initial version (was deduplicating by texture name instead
+  of TXD name); caching confirmed working (3 calls -> 1 actual fetch).
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+- **Aug 1, 2026 (cont'd)** — Per Keith, using his real `docks.ipl` and
+  `generic.ide` (comparison screenshots against MooMapper running the
+  same file): "I don't see any indication that the genericide
+  textures are being loaded, shown in the status, and those objects
+  are still white" and "some of the objects don't align correctly,
+  the rotation is off, maybe some values in the IPL are not being
+  parsed correctly."
+
+  **Texture status feedback**: added visible status output to
+  `_preload_generic_ide_textures` (via `_set_status`, which falls
+  back to a console print if no status widget is showing) - reports
+  how many `generic.ide` objects were found, how many distinct TXDs,
+  and how many were actually fetched. Verified against the real
+  uploaded `generic.ide`: correctly found 306 objects across 108
+  distinct TXDs (confirming the earlier fix's *logic* is sound - it
+  genuinely does find `mine`/`metal`/`dynbarrels`/etc. when given
+  real data), and correctly reported a 0-fetched worst case when the
+  texture lookup itself was simulated to fail. This should reveal in
+  Keith's live environment whether `generic.ide` is loading at all
+  (0 objects found would mean it isn't - a separate, upstream issue)
+  or whether the fetch step itself is what's failing.
+
+  **Rotation investigation**: verified every layer of the pipeline
+  against Keith's real data and found each one correct on its own -
+  `detect_game_from_dat_filename('gta_vc.dat')` correctly returns VC;
+  `GTAWorldLoader`/`IPLParser` construction correctly propagates that
+  game value through; `IPLParser`'s VC-specific 13-field branch
+  (interior, position, scale, then quaternion) correctly parses every
+  field of the real `docks.ipl` verbatim, including `docks10`'s
+  non-identity rotation; and the quaternion-to-matrix conversion
+  (`DFFViewport._quat_to_gl_matrix`) was cross-checked against
+  `scipy.spatial.transform.Rotation` using that exact real rotation
+  value and produced an identical matrix. Could not find the actual
+  cause through static analysis alone given everything checked out
+  correct in isolation - narrowing this down further needs either
+  Keith's live environment directly, or a closer visual comparison of
+  which specific objects look misaligned between the two screenshots.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "Right-click on the model >
+  Show textures brings nothing up nothing, i was expecting to see
+  tiles, or something telling me there missing, also showing the IDE
+  line" - confirmed the same underlying bug as the earlier generic.ide
+  fix (his own words: "No fallback; I think this makes it harder to
+  fix"), just hit via a different real example this time (`b_hse_pier`,
+  TXD `boathouse`, from `docks.ide` line 127).
+
+  Fixed both `_show_textures_for_instance` (the right-click menu path)
+  and `_on_ipl_model_row_selected` (the Models panel path) to use the
+  same robust `_get_txd_textures_with_fallback` the generic.ide fix
+  already uses, instead of a plain `model_cache.get_textures()` call
+  that silently left the table empty with zero indication why. Both
+  now show a clear message either way - on success, the texture count
+  plus which TXD and where it was found from; on failure, an explicit
+  "not found in any indexed IMG archive or as a loose file" message -
+  and both now include the requested IDE source/line info (e.g. "TXD
+  from docks.ide, line 127").
+
+  Also logged Keith's fuller Item Editor Dialog redesign spec to
+  TODO.md - a real header format, showing both raw IPL/IDE lines
+  verbatim, editable fields with live viewport sync and write-back,
+  Interior/2DFX/TOBJ as buttons, Apply/Undo/Save, and SA section
+  support - a substantial roadmap item, not built this pass.
+
+  Verified end-to-end with Keith's own real example (`b_hse_pier`/
+  `boathouse`/`docks.ide` line 127): both the not-found case (clear
+  message, IDE line shown) and the found case (correct texture count,
+  source, IDE line) confirmed working correctly. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Redesigned the Item Editor Dialog
+  (`_InstanceEditPanel`) per Keith's fuller spec, using his real
+  example (`veg_palmkb2`, ID 451, `nbeach.ipl`):
+
+  - Window title now reads `[IPL object editor] ID 451 | veg_palmkb2
+    | nbeach.ipl`.
+  - Identity section now shows both the raw IPL inst line and the
+    matching IDE line verbatim (reconstructed from parsed fields -
+    the original file text isn't kept in memory), plus a note on
+    which TXD is expected. Verified exact match against Keith's own
+    example precision (`-847.8391113` etc., `.10g` formatting).
+  - Added a genuinely missing Scale nudge section (Position/Rotation
+    already had one via `_add_nudge_section`, Scale never did) plus a
+    "Set Scaling to 0" button - both wired the same way Position/
+    Rotation already are (live edits, immediate viewport sync via
+    `_on_instance_edited`).
+  - Placement Info's 2DFX/TOBJ are now `[2DFX (n)]`/`[TOBJ (n)]`
+    buttons showing a popup with details on click, instead of
+    permanent always-visible text blocks (Interior stays as plain
+    text).
+  - Bottom row is now `[Apply] [Undo] [Close] [Save]` (previously
+    just `[Close]`) - Apply/Undo/Save are honest stubs with a clear
+    explanatory popup rather than silently doing nothing, since real
+    undo and file write-back are both separate, larger TODO items.
+
+  Deferred to TODO.md (each needs more design work): editable raw
+  IPL/IDE line text with write-back and live sync; extensibility for
+  SA's additional IDE section types; whether double-click should
+  still open this directly now that right-click "Info" covers the
+  same ground; and real Undo.
+
+  Verified end-to-end with Keith's own exact example data: window
+  title, both raw lines (byte-for-byte match on the IPL line,
+  including full precision), TXD note, 2DFX/TOBJ button counts, Scale
+  spins defaulting to (1,1,1) and correctly updating to (0,0,0) via
+  Set Scaling to 0 (both the spin boxes and the underlying instance)
+  all confirmed correct. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "when i close all the panes,
+  there is noway to bring them back, so I suggest we add them to the
+  ribbon right click aswell." The Panels submenu (dynamic dock list
+  with tick marks, added earlier) only lived under Menu -> View -
+  with every dock closed, right-clicking on any dock to find it isn't
+  possible, and the Menu button may not be the first place someone
+  looks. Added the same dynamic Panels submenu (reusing the identical
+  `findChildren(QDockWidget)` + `toggleViewAction()` logic) to the
+  toolbar's own right-click context menu (`_toolbar_context_menu`,
+  the one showing Icon Set/Icon Size/Ribbon Manager/Lock-Unlock All
+  Toolbars) too - a toolbar is always visible regardless of dock
+  state, so this gives a reliable way back even when every single
+  pane is closed.
+
+  Verified: closed every dock programmatically, confirmed the Panels
+  submenu still correctly lists all 6 (Frame Hierarchy/IPL Controls/
+  IPL Inst File/Models/Object Browser/Textures), each unchecked but
+  enabled and clickable to restore. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Refined the Item Editor Dialog per
+  Keith's follow-up screenshot/feedback, using his real example
+  (`washer`, ID 331, `starisl.ipl`, TXD `dynjunk`):
+
+  - Removed the "IDE Info" section entirely (Type/Section/Source/
+    mesh_count/draw_dist/flags) - redundant now that Identity shows
+    the raw lines directly. Its "Source generic.ide (line 28)" info
+    moved into Identity's IDE line instead, appended after the raw
+    fields.
+  - Identity's 3rd row now reports the TXD's *real* status instead of
+    a generic "expected to be loaded" note - one of three messages
+    depending on what actually happened: `"{txd}.txd is missing from
+    gta3.img"`, `"{txd}.txd is loaded"` (with a `[Show]` button that
+    populates the existing Textures dock), or `"{txd}.txd exists but
+    can not be loaded"`. Extended `_get_txd_textures_with_fallback`
+    to return a proper 3-way status (`'loaded'`/`'missing'`/
+    `'failed'`) by checking `model_cache`'s own `_txd_index` directly
+    - distinguishing "never indexed anywhere" from "indexed (or a
+    loose file exists) but failed to read/parse", which a plain
+    textures-or-None result can't tell apart. Updated all 6 existing
+    callers of this method for the new 3-tuple return.
+  - Position/Rotation/Scale changed from one row per axis (3 rows per
+    section) to one row per *section* - X/Y/Z side by side, each
+    showing just label + single-step `-`/`+` + value (per Keith:
+    "instead show as X <> Y <> Z <> to save space"). The large-step
+    («/») buttons are hidden in this mode rather than removed, so
+    they're still there to reintroduce later if wanted. Caught and
+    fixed a real column-math bug in the first pass (used a
+    3-per-axis column stride when each axis actually needs 4 widgets,
+    causing the 2nd/3rd axis to silently overlap the 1st's buttons).
+
+  Note: Keith's fuller spec also mentioned "[Show] textures as tiles
+  with name as a dropdown" - the tiles part is wired (reuses the
+  existing Textures dock), but what a name dropdown should actually
+  do here isn't clear yet, left for a follow-up.
+
+  Verified end-to-end with Keith's own real example data: Identity
+  correctly shows the raw IPL line, the IDE line with source info
+  appended, and all three TXD status messages (tested missing/
+  loaded/failed cases individually, confirming the Show button only
+  appears in the loaded case); Position grid confirmed correct
+  column layout (X/`-`/value/`+`, Y/../.., Z/../.., no overlaps)
+  after the column-math fix. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Further refined the Item Editor Dialog
+  per Keith's latest screenshot/feedback, using his real example
+  (`veg_palwee01`, ID 448, `littleha.ipl`):
+
+  - Made it a real dockable panel, starting floating by default
+    ("docLable, but start undocked") - wrapped `_InstanceEditPanel`
+    (previously a `Qt.WindowType.Tool` standalone floating widget) in
+    a proper `QDockWidget` added to `outer_mw`, with `setFloating
+    (True)` so it opens the same way as before unless someone
+    explicitly drags it into the main window. Close now hides the
+    whole dock rather than just the panel content.
+  - Removed the duplicate "Source IPL" line from Placement Info (it
+    already appears in the window title) - and since Interior/LOD
+    also moved out (see next point), Placement Info as a whole
+    section is now empty and gone entirely.
+  - Interior/LOD index now sit on the right side of the TXD status
+    row instead of their own section ("the Interior [0] and LOD
+    index -1 should be on the same row as Generic.txd is load [show]
+    ... but from the right on the same row").
+  - Fixed unreadable/clipped spin box values: removed the native up/
+    down arrow buttons (`QAbstractSpinBox.NoButtons`) since the
+    dedicated `‹`/`›` chevron buttons already do that job - freed up
+    space that was being spent on redundant arrows, giving the actual
+    value text room to display without clipping.
+  - Tightened margins/spacing throughout (main layout, each section
+    box, the nudge grids) for a more compact overall panel.
+
+  Verified end-to-end with Keith's own real example data: dock
+  confirmed created and floating on first show; Placement Info
+  confirmed gone; TXD status row confirmed showing "generic.txd is
+  loaded" + Show button + "Interior: 0   LOD index: -1" all on one
+  row; spin box confirmed using `NoButtons` and correctly displaying
+  "-793.59" (matching the real position value) without clipping;
+  Close confirmed hiding the dock. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's feedback (using a real
+  screenshot showing his game folder has both "Generic.txd" and
+  "generic.txd" as two different files - 348.0 KiB vs 256.4 KiB):
+  "since we have another generic.txd, just load them both without the
+  fall back, there should be no fallbacks, it should either work or
+  fail."
+
+  Removed the loose-file fallback entirely from `_get_txd_textures`
+  (renamed from `_get_txd_textures_with_fallback`, since it no longer
+  has one) - now looks up a TXD only via the game's indexed IMG
+  archives; if that fails it reports `'missing'` or `'failed'`
+  cleanly rather than silently trying a second source. The earlier
+  fallback design (added to fix white generic.txd objects a few
+  passes ago) could have silently picked the wrong one of two
+  conflicting same-named TXDs without ever surfacing that a conflict
+  existed. Updated all 9 call sites for the renamed method.
+
+  Also per Keith: "In the Identify section, right-click veg_palwee01
+  and show the names of the textures from veg_palwee01, Show tex
+  names shown in image, and Show Textures would display as [T] [T]
+  [T] [T] [T] as small thumbnails in a row" (image was RW Analyze's
+  "Texture List for <model>" dialog). Added a right-click context menu
+  on the Identity section with two new options:
+  - "Show tex names": an RW-Analyze-style table (Texture Name/Alpha
+    Name/Req-Incl) listing every texture the model's own geometry
+    materials reference, cross-checked against what the TXD actually
+    contains - "Req" if only the model needs it, "R&I" if the TXD has
+    it too.
+  - "Show Textures": a compact horizontal strip of small thumbnails,
+    distinct from the full Textures dock table (kept as-is for
+    detailed browsing) - a quick visual-only glance.
+
+  Logged "Compare TXD" (a TXD Workshop feature - listing/highlighting
+  duplicate-named TXDs like his real Generic.txd/generic.txd case) to
+  TODO.md, since it's a different component and a substantial feature
+  on its own.
+
+  Verified end-to-end: no-fallback behavior confirmed (an indexed-but-
+  failing TXD correctly returns `'failed'` without attempting any
+  loose-file lookup); the Req/Incl logic confirmed correct with
+  realistic data (a texture present in both the geometry and the TXD
+  correctly reports "R&I", one only in the geometry correctly reports
+  "Req"); both new dialogs confirmed running without crashing. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: "[Show] button
+  can't be seen; only showing 3px in height for the font", "the ipl
+  values are barely visible", and "3 buttons; hard to see, should be
+  3 in a row - space then the 4 buttons under them, I can't tell what
+  they are." All three symptoms had one root cause: the dock (made
+  floating-by-default last pass) had no explicit size set anywhere -
+  a `QDockWidget` briefly added to a dock area right before
+  `setFloating(True)` often inherits a tiny constrained size from
+  that instant rather than sizing to its actual content, squeezing
+  every `setFixedHeight(18)` widget in the panel down well below
+  readable size and crowding the Prev/Next and Apply/Undo/Close/Save
+  rows against each other.
+
+  Fixed: bumped `_InstanceEditPanel`'s minimum size from 180×(none) to
+  380×520 (180 was never enough for the compact X/Y/Z-per-row layout,
+  and there was no minimum height at all), and explicitly `dock.resize
+  (460, 560)` right after `setFloating(True)` so the floating window
+  opens at a sensible size instead of whatever tiny default Qt would
+  otherwise give it.
+
+  Verified: dock confirmed at the requested 460×560 on creation, well
+  above the panel's 380×520 minimum; the `Show` button confirmed
+  reporting a real `height() == 18` with sensible on-screen geometry
+  (not collapsed). Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: merged "Set Scaling to 0"
+  (previously its own row) with the `[2DFX]`/`[TOBJ]` buttons into a
+  single row of three - `[2DFX (n)] [TOBJ (n)] [Set Scaling to 0]`.
+  Fixed a `self.` reference bug present in Keith's own draft snippet
+  along the way (`_zero_btn.setToolTip(...)` without `self.` would
+  have raised `NameError`). Kept the 18px height convention used
+  throughout. Verified all three buttons report `height() == 18` and
+  Set Scaling to 0 still correctly zeroes the instance's scale. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "buttons still unreadable, so
+  im moving this around. looking at the code on IPL sections [IPL]
+  Tab, we need to show buttons in that size, and note that all
+  buttons on widgets and panels, are to that standard." Re-examined
+  the exact IPL Sections Open/Close/New/Delete button code (the one
+  Keith confirmed as "a perfect size" a few passes ago) and found the
+  real standard includes more than just `setFixedHeight(18)` + the
+  compact stylesheet, which is all earlier passes at the Item Editor
+  Dialog had been applying: an 18x18 icon alongside the text too.
+
+  Added `_make_standard_button(text, icon=None, tooltip=None)` - one
+  shared, documented helper matching this exact standard, so it's
+  applied consistently rather than hand-rolled slightly differently
+  each time. Applied it to every button in the Item Editor Dialog:
+  Apply/Undo/Close/Save and the Identity section's Show button now
+  have real icons (checkmark/undo/close/save/view, from `apps.
+  methods.imgfactory_svg_icons` - the same module IPL Sections' own
+  icons come from), matching the reference exactly; 2DFX/TOBJ/Set
+  Scaling to 0 stay text-only (no clean icon match exists for these
+  yet) but still go through the same helper for consistent sizing/
+  styling.
+
+  Verified: every button confirmed `height() == 18`; Apply/Undo/
+  Close/Save/Show confirmed carrying a real icon; 2DFX/TOBJ/Set
+  Scaling to 0 confirmed correctly icon-less but still properly
+  sized. Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: "the value
+  entries need to be 4px wider, and the red lines show unused space,
+  so we can remove the emtpy areas" (red lines marking blank vertical
+  space within each Position/Rotation/Scale section).
+
+  Widened the value spinboxes from 70 to 74px. The empty space's real
+  cause: `QGroupBox` sections had no explicit vertical size policy,
+  so with the dock's fixed initial height (560px, set for the taller
+  pre-icon layout from a few passes ago) now noticeably taller than
+  the actual compact content needs (291px observed), the extra space
+  was being distributed across each expanding section rather than
+  collecting in one place. Set `QSizePolicy.Fixed` vertically on both
+  section box constructors (`_add_section` and `_add_nudge_section`)
+  so each sizes tightly to its own content, and added `self._lay.
+  addStretch()` at the end of the main layout so any genuinely extra
+  space goes to the bottom instead of being spread internally.
+  Reduced the panel's minimum height (520 -> 320) and the dock's
+  initial resize height (560 -> 400) to match the new compact reality
+  - the old values were themselves large enough to force wasted space
+  even with the above fixes.
+
+  Verified: spinbox confirmed `width() == 74`; Position section's
+  vertical policy confirmed `Fixed`; its `sizeHint()` confirmed a
+  tight 50px (matching a single row + margins, no leftover space);
+  panel's overall `sizeHint()` confirmed 447x291, comfortably inside
+  the new, more realistic minimum/initial sizes. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Addressed two of the `#TODO` comments
+  Keith added himself while reviewing the dialog:
+
+  "Show textures work but texture names, shows the name texture name
+  in all cells" - `_show_tex_names_dialog` now deduplicates required
+  textures by name. Multi-LOD models commonly have several geometries
+  (high detail, low detail, etc.) that all reference the same texture,
+  which was producing one identical row per geometry rather than one
+  row per distinct texture - looked like every row/cell showed the
+  same name because, for models with few distinct textures, they
+  mostly did. Verified with a realistic 2-geometry/1-shared-texture
+  case: correctly collapses to 1 row instead of 2.
+
+  "the values in the x, y and z boxes need to be visble" - found the
+  real cause: `QDoubleSpinBox`'s own `minimumSizeHint()` is 29px tall,
+  but the spinbox was being forced down to the app-wide 18px button
+  standard - well under what it needs to render its frame, padding,
+  and text comfortably, which is why the value kept looking clipped/
+  faint no matter how much the *width* grew in earlier passes (70 ->
+  74px). Bumped the whole nudge row (buttons + spinbox) from 18 to
+  22px - a real compromise between "compact" and "not fighting the
+  widget's own natural minimum." This is specifically a spinbox
+  issue, not a general button one - push buttons don't have the same
+  natural-minimum conflict at 18px.
+
+  Verified: spinbox confirmed `height() == 22` (up from the clipped
+  18, still well short of the fully-comfortable 29 natural minimum,
+  but no longer forcing it more than 7px under). Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: "the values need
+  2px added, so the bottom of the text shows, and we can add << >>
+  back." Bumped the nudge row height from 22 to 24px. Restored the
+  large-step (`«`/`»`) buttons into the compact row (each axis now
+  shows label/«/-/value/+/» - 6 widgets instead of 4), which an
+  earlier pass had hidden to save space; bumped the panel's minimum
+  width (380 -> 560) and the dock's initial resize width (460 -> 620)
+  to accommodate the wider rows.
+
+  Verified: spinbox confirmed `height() == 24`; large-step buttons
+  confirmed visible and correctly positioned around the value in the
+  grid (label/«/-/value/+/» at columns 0-5). Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith, commented out
+  `self._lay.addStretch()` in the Item Editor Dialog (his own local
+  edit, applied here to keep the repo in sync) - the stretch had been
+  added a few passes ago to push any leftover vertical space to the
+  bottom of the panel rather than having it spread across each
+  section; Keith removed it, presumably because the section-level
+  `QSizePolicy.Fixed` fix from that same pass is enough on its own
+  now that the dock/panel minimum sizes were also brought down to
+  match the real compact content size.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "the world map icons that is
+  seen in Dat Browser, when right clicking the dat file, can be used
+  for map workshops app icon, shown in the taskbar, when standalone."
+
+  DAT Browser's "Load with Map Workshop…" context menu item uses the
+  🗺 emoji as a plain text prefix (`dat_browser.py`) - no actual icon
+  file exists for it. Added `ModelWorkshop._make_world_map_icon()`,
+  rendering that same emoji onto transparent `QPixmap`s at 5 sizes
+  (16/24/32/48/64) via `QPainter`, giving a real multi-resolution
+  `QIcon` with the same visual identity. Replaced the leftover
+  `SVGIconFactory.mesh_icon` window icon (a carry-over from Model
+  Workshop's original branding, unrelated to maps) with it, and also
+  set it at the `QApplication` level in the standalone `__main__`
+  block, since several Linux desktop environments look there
+  specifically for the taskbar/dock icon rather than the window's own
+  icon alone.
+
+  Verified: icon confirmed non-null with all 5 expected sizes
+  registered; the 32px pixmap confirmed containing real non-
+  transparent pixels (340 of 1024, consistent with a rendered glyph
+  shape) rather than coming back empty. Could not visually confirm
+  the glyph renders as the intended colour emoji specifically (this
+  sandbox may lack proper emoji font support that a real desktop
+  would have) - worth Keith's visual confirmation once pulled. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Three pieces per Keith's latest message:
+
+  **1. Real SVG Earth icon** (replacing the emoji-rendering approach
+  from last pass): "needs to be multi color svg, blue background,
+  greeny to yellow dithed contenents on the equator, showing Earth.
+  There should be no emojis, except in DP5 point." Built a real SVG
+  (blue ocean circle, layered green-to-yellow continent blob shapes
+  across the equatorial band) and render it via `QSvgRenderer` at 5
+  icon sizes, replacing the earlier `🗺` emoji-onto-pixmap approach
+  entirely. Verified: 59 distinct colors sampled from the rendered
+  32px icon, including clear blue and multiple green/yellow-green
+  tones - a real multi-color result, not dependent on the system's
+  emoji font support the way the previous approach was.
+
+  **2. Load button in the DAT tab**: "next to [Edit] [Save], there
+  should be an option to 'Load' button, left of [Edit] allowing
+  standalone to read the root dat file, picking gta.dat (SA)
+  gta3_dat (LC) gta_vc.dat (VC) gta_sol.dat/gtasol.dat for [SOL]."
+  Added a `Load` button left of `Edit` in `_create_dat_tab`, wired to
+  the already-existing `_load_game_dat_file()` - which already opens
+  exactly this file-picker dialog (filtered to gta3.dat/gta_vc.dat/
+  gta.dat/gta_sol.dat/gtasol.dat/gta_quick.dat) and detects the game
+  from the filename, so this needed no new loading logic, just
+  exposing the existing entry point from this tab. Works identically
+  whether Map Workshop is standalone or docked, since it's the same
+  underlying method either way.
+
+  **3. Duplicate-named TXD data loss** ("both Generic.dat, and
+  generic.dat should be read and storied in memory so we don't see
+  white textures" - read as TXD given the "white textures" context,
+  matching his real `Generic.txd`/`generic.txd` case from a few
+  passes ago): found and fixed a genuine bug in `ModelCache`
+  (`depends/model_cache.py`) causing this - `_txd_index`/`_dff_index`
+  stored a single `(img_path, entry)` tuple per lowercase name, so
+  indexing two archive entries that only differ by case (his real
+  case) silently overwrote one with the other, permanently losing
+  whichever indexed first. Changed both indexes to store a *list* of
+  entries per name; `get_textures` now merges every duplicate's
+  textures together (a texture name already found from an earlier
+  entry isn't overwritten, but distinct texture names from other
+  duplicates are added in), and `get_geometry` tries each entry in
+  order until one parses successfully (geometry can't be merged the
+  way textures can, so this just stops one bad duplicate from
+  blocking a working one under the same name).
+
+  Verified with a mock 2-archive scenario mirroring Keith's real
+  case: two duplicate-named entries with different content (one
+  texture shared with different sizes, one texture unique to each) -
+  confirmed both distinct texture names end up available, and the
+  shared one correctly keeps its first-found version rather than
+  either silently disappearing. Full `QApplication` instantiation
+  clean, `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Two real bugs fixed from Keith's latest
+  testing (DAT loading and textures now confirmed working standalone):
+
+  **1. LOD view stubbed for VC**: "Fix display: Show All, Show LOD,
+  Show Norm, as this seems to be stubbed." Found the cause -
+  `GTAWorldLoader.resolve_lod_pairs()` only ever built pairs for SA/
+  SOL (`if self.game not in (SA, SOL): return {}`), since it relied
+  entirely on SA's `lod_index` field, which GTA3/VC's inst format
+  doesn't have at all - so for VC, `_lod_pairs` was always empty and
+  the three display modes had nothing to filter, matching Keith's
+  "seems to be stubbed" exactly. Added a second detection path for
+  GTA3/VC: an instance whose model name starts with "LOD"
+  (case-insensitive) pairs with another instance in the same source
+  IPL file whose name matches the remainder (e.g. "LODdock10" ->
+  "dock10") AND sits at the same position (within a small tolerance,
+  guarding against unrelated objects sharing a name pattern
+  coincidentally) - matches the naming convention visible in Keith's
+  own earlier docks.ipl data ("LODdock10", "LODks85", "LODks96"
+  alongside their normal counterparts).
+
+  Verified with a realistic case mirroring his data: a real pair
+  (`dock10`/`LODdock10`, same position) correctly resolved; an
+  unrelated same-file LOD-prefixed instance with no matching normal
+  counterpart correctly stayed unpaired. Then verified all three
+  display modes end-to-end: Show Norm returns just the normal
+  instance, Show LOD just the LOD one, Show All both.
+
+  **2. Viewport zooms out when nudging an object**: "When moving an
+  object with the object editor... the viewpoint zooms out
+  automatically; the viewpoint should stay on the chosen object."
+  Found the cause - every nudge calls `_on_instance_edited`, which
+  re-applies the IPL visibility filter to keep the World View panes
+  in sync, which calls `DFFViewport.set_world_instances()` - and that
+  method unconditionally re-fit the camera to the whole map's
+  bounding box on every call, fighting whatever position the camera
+  had just been navigated to. Added an `auto_fit` parameter, threaded
+  through `set_world_instances` -> `_refresh_world_view` ->
+  `_apply_ipl_visibility_filter`, defaulting to `True` everywhere
+  (preserving the existing fit-on-load/IPL-switch behavior) except
+  `_on_instance_edited`, which now passes `auto_fit=False`.
+
+  Verified: set a distinctive camera state (dist=12.34, pan=(-99,
+  -88)), triggered an edit, confirmed both values unchanged
+  afterward - camera genuinely stays put now. Full `QApplication`
+  instantiation clean, `ast.parse` clean on both files.
+
+  Deferred to TODO.md (each a substantial feature on its own): alpha-
+  texture rendering, a render-mode toggle (semi-solid/non-textured/
+  wireframe) for the world view specifically, gizmo-based free object
+  movement (Ctrl+click-drag on X/Y/Z with a lockable axis gizmo), and
+  object-to-object snapping while moving.
+
+- **Aug 1, 2026 (cont'd)** — Two more pieces from Keith's request:
+
+  **Alpha-textured objects**: "show any objects with alpha textures,
+  as that would display in the game." Found the texture's own alpha
+  channel was already being uploaded to the GPU correctly (`GL_RGBA`
+  format in `_upload_textures`), but `_draw_textured` only ever
+  triggered blending based on *material* face-color alpha, which most
+  alpha-textured objects (chain-link fences, foliage, glass) don't
+  actually set - their transparency comes entirely from the texture's
+  own per-pixel alpha, which was being ignored. Enabled `GL_ALPHA_TEST`
+  (`glAlphaFunc(GL_GREATER, 0.5)`) around textured rendering - cutout-
+  style transparency (a pixel draws fully or not at all past a
+  threshold), chosen over full `GL_BLEND` deliberately since it needs
+  no back-to-front sorting and doesn't disturb depth writes. Disabled
+  again before the untextured-triangle path, which doesn't have real
+  per-pixel alpha to test against and already has its own correct
+  material-alpha blend split.
+
+  **Render mode toggle**: "Add the option to show as semi-solid, non-
+  textured, wireframe." Added a Render dropdown to IPL Controls
+  (Textured/Non-Textured/Wireframe), wired to `DFFViewport.
+  set_render_mode` - which already existed and worked, just had no
+  world-view-facing control (only ever called once, hardcoded to
+  `'textured'`, when a world first loaded). While wiring this, found
+  and fixed a real conflict: that hardcoded call ran on *every*
+  refresh, including every nudge edit and IPL visibility toggle - so
+  picking Wireframe and then editing anything would silently snap
+  back to Textured. Added a `_world_render_mode_set` flag so the
+  default only applies once per world load, and resets on a genuinely
+  new load so a fresh map still defaults to Textured rather than
+  inheriting a previous session's choice. Also caught and fixed a
+  real bug in the same edit: initially called a `_make_standard_
+  button` helper that only exists on the unrelated `_InstanceEditPanel`
+  class, not `ModelWorkshop` - fixed to match `ModelWorkshop`'s own
+  established button pattern instead (caught immediately by the next
+  instantiation test).
+
+  Deliberately did not invent a "semi-solid" mode - what that should
+  actually mean (fixed reduced opacity applied globally? something
+  else?) isn't clear yet; the three modes with unambiguous meaning
+  are wired, holding this one for Keith's clarification.
+
+  Verified: mock render-mode-set test confirmed first load forces
+  `'textured'`, a user's subsequent manual pick (`'wireframe'`)
+  sticks, and a following edit-triggered refresh no longer resets it.
+  Full `QApplication` instantiation clean, `ast.parse` clean on both
+  files. Could not runtime-test the actual OpenGL alpha-test behavior
+  (no PyOpenGL in this sandbox) - needs Keith's visual confirmation.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "When there are binary IPLs,
+  these should also be shown in object browser in IPL files | Binary
+  IPL as a name column." Added a third "Format" column to the IPL
+  Sections table, showing "Binary IPL" for files detected as binary
+  format (blank for text) - reuses `detect_ipl_format` (already built
+  for `BinaryIPLParser`), reading just the first 64 bytes of each
+  file rather than the whole thing.
+
+  Verified with a real text `.ipl` and a synthetic binary one (`bnry`
+  magic header): correctly showed "Binary IPL" for the binary file
+  and blank for the text one. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Solved the SA Z-rotation misalignment
+  Keith discovered and reported with two comparison screenshots:
+  "the Z rotation alignment issue - on some lines, it's not reading
+  the -90.0, for example. It's only reading 90.0; adding the - fixed
+  the issue." Traced this to a real difference in SA's rotation
+  quaternion convention versus VC's, using his own real data.
+
+  Found the exact raw line (`LAe.ipl` line 91, from his uploaded
+  files): `5533, LODroadB48, 0, 1932.59375, -1782.101563, 12.5, 0, 0,
+  0.4516149163, 0.8922129869, -1`. Standard quaternion-to-euler math
+  (cross-checked against `scipy` earlier this session, so trusted as
+  mathematically correct) converts this to yaw=+53.6deg - but Keith's
+  screenshots showed the object only aligns correctly when the Z
+  spinbox reads -53.69deg. Working backward: `euler_degrees_to_quat
+  (0,0,-53.69)` produces `(0,0,-0.4516,+0.8922)` - the *conjugate* of
+  the raw quaternion (negate x,y,z, keep w). Sampled several more
+  real instances across his uploaded `LAe`/`LAe2`/`LAhills`/`LAn`/
+  `LAs` files to check for a wider pattern; none had non-zero
+  `rot_x`/`rot_y` to fully distinguish "negate z only" from a true
+  full conjugate, but the conjugate is the mathematically well-
+  defined, standard operation (unlike "negate z only", which isn't a
+  meaningful operation in general once x/y aren't zero), and matches
+  the confirmed case exactly.
+
+  Added `ModelWorkshop._effective_rotation`/`_conjugate_rotation_for_
+  game`, applying this conjugate for SA/SOL specifically - not VC/
+  GTA3, which Keith already confirmed renders correctly as-is with
+  real Vice City data, so this is scoped by game rather than applied
+  universally (avoiding any risk of regressing already-working
+  behaviour). Used in two places: `_refresh_world_view` (actual
+  viewport rendering) and `_InstanceEditPanel`'s Rotation spin boxes
+  (`_refresh_rotation_spins`/`_on_rotation_nudged`, so the UI shows/
+  edits the same effective value the viewport renders, in both
+  directions - a conjugate is its own inverse, so editing the
+  effective value and converting back to what's actually stored uses
+  the identical operation). Deliberately does NOT touch the stored
+  `inst.rot_x/y/z/w` themselves - the Identity section's raw IPL line
+  still shows the genuinely verbatim file values.
+
+  Verified end-to-end with Keith's exact real data: effective
+  rotation for SA computed as `(-0,-0,-0.4516,+0.8922)`, converting
+  to yaw=-53.69deg - an exact match to his manual fix; VC confirmed
+  completely unaffected (effective rotation identical to raw); raw
+  stored `inst.rot_z`/`rot_w` confirmed unchanged after the fix is
+  applied; full UI flow confirmed showing -53.69 in the actual
+  Rotation Z spin box. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two pieces per Keith's follow-up:
+
+  **Binary IPLs embedded in gta3.img**: "the binary ipl's are in the
+  gta3.img, i think the paths to these are hard-coded in the exe...
+  Count the binary IPL files, display those found in the gta3.img as
+  the file names in the object browser." Unlike text IPLs (whose
+  paths are listed via IPL directives in the .dat, and discovered
+  normally through `loader.available_ipls`), these apparently have no
+  `.dat` reference at all - the game's own exe loads them directly.
+  Added `_scan_binary_ipls_in_img_archives`, scanning every indexed
+  IMG archive's own entry list for `.ipl`-extension files, detecting
+  binary format by reading just the first 64 bytes of each (reusing
+  `detect_ipl_format`), and adding any found to the IPL Sections list
+  under a synthetic stem (there's no on-disk loose file the way a
+  regular entry has). The Format column's "Binary IPL" detection now
+  checks this set first before falling back to reading a loose file's
+  bytes. This is the listing/counting half only, matching Keith's own
+  wording - actually loading their instance content is a follow-up
+  (`BinaryIPLParser` already accepts raw bytes, so feasible later).
+
+  Verified with a synthetic `gta3.img` containing 2 binary IPL entries
+  (using the same real filenames `BinaryIPLParser`'s own docstring
+  references - `crack.ipl`, `countn2_stream1.ipl`) plus one non-IPL
+  entry: correctly found and counted both, correctly excluded the
+  unrelated entry.
+
+  **Column width persistence**: "i'd like to keep track of cell
+  widths, so if changed, save them." The new Format column was stuck
+  in `Fixed` resize mode (couldn't be resized by the user at all) and
+  its width was hardcoded rather than restored from `map_settings`
+  the way the IPL File column already was. Changed to `Interactive`
+  and restored from `ipl_sections_column_widths` if a saved value
+  exists - the existing save handler already covered all columns
+  generically, this was purely a restore-side gap.
+
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+  **VC rotation question**: "Same issue is in VC, might as well check
+  gta3 ipl parsing rotation rendering bug?" Re-verified the exact real
+  VC rotation used earlier this session (`docks10`, `docks.ipl`) -
+  still matches `scipy`'s independent calculation exactly with the
+  standard (non-conjugated) math, same as before. Didn't apply the
+  SA conjugate to VC/GTA3 without further evidence, since doing so
+  would very likely break this already-verified-correct behaviour
+  rather than fix anything - asked Keith for a specific VC object/
+  example to investigate properly instead of guessing.
+
+- **Aug 1, 2026 (cont'd)** — Corrected the binary IPL scanning per
+  Keith's detailed follow-up explanation: "gta.dat contains entries
+  for text-based IPL files... Binary IPLs (streaming files like
+  LAe2_stream0.ipl) are not directly listed in gta.dat. Instead, they
+  are stored inside the .img archives... The game engine automatically
+  links these binary files to their parent text IPL by matching the
+  filename prefix (e.g. LAe2 in LAe2_stream0.ipl corresponds to
+  LAe2.IPL)." The previous pass treated every binary entry found in
+  an IMG archive as its own standalone row, which didn't reflect this
+  relationship at all.
+
+  Rewrote `_scan_binary_ipls_in_img_archives`: a binary entry is now
+  treated as belonging to an already-known text IPL when either its
+  own stem exactly matches the text IPL's stem (not every binary
+  entry uses the `_streamN` suffix - `BinaryIPLParser`'s own docstring
+  references a real `crack.ipl` sample with no such suffix), or its
+  stem matches `{text_ipl_stem}_streamN`. A match gets recorded
+  against the *existing* text IPL row (`_ipl_names_with_binary_stream`)
+  rather than adding a separate one - the Format column now shows
+  "Text + Binary Stream" for those. Only genuinely standalone binary
+  entries with no matching text IPL at all still get their own row
+  and "Binary IPL" label.
+
+  Verified with a scenario matching Keith's own example exactly: a
+  known text `LAe2.IPL` plus a binary `LAe2_stream0.ipl` found in the
+  archive, alongside an unrelated standalone binary `crack.ipl` -
+  confirmed the stream file correctly associated with `LAe2.IPL`
+  (no separate row created) while `crack.ipl` correctly got its own
+  row. Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "also binary ipls might show
+  in the gta3.img as LAn2_stream0.ipl, LAn2_stream1.ipl,
+  LAn2_stream2.ipl and so on." Upgraded
+  `_ipl_names_with_binary_stream` from a boolean set (just "has some
+  stream files") to a dict mapping each text IPL's display name to
+  the *list* of its matched stream entry names, so the Format column
+  can show a real count ("Text + 3 Binary Streams") instead of a
+  generic "Text + Binary Stream" - and the actual entry names are now
+  tracked, ready for a future loading feature to use.
+
+  Verified with 3 numbered stream files matching Keith's exact
+  example (`LAn2_stream0/1/2.ipl`) against a known text `LAn2.IPL`:
+  all 3 correctly grouped together, Format column correctly reads
+  "Text + 3 Binary Streams". Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's screenshot: "hard to see, i
+  can not move the cell width of IPL file, but all I can see is
+  test... does it show the name of the img3 file dir LAn2_Stream0.ipl
+  naming format?"
+
+  Found the real cause of the unresizable column: the IPL File
+  column defaulted to `Stretch` resize mode the first time this table
+  is ever shown (before any width has been saved) - Stretch mode
+  ignores manual drag-resize attempts entirely, which is exactly why
+  dragging its border did nothing. Changed to `Interactive` with a
+  sane default width (200px) from the start instead, and widened the
+  Format column's own default (70 -> 110px, since "Text + N Binary
+  Streams" is longer than the "Binary IPL"-only case it was sized
+  for).
+
+  Also answering his question directly: the actual stream file names
+  weren't shown anywhere before, just a count. Added a tooltip on the
+  Format cell listing every associated stream file's real name (e.g.
+  hovering a "Text + 3 Binary Streams" cell now shows
+  "LAn2_stream0.ipl / LAn2_stream1.ipl / LAn2_stream2.ipl" on
+  separate lines) - and the same for standalone binary entries,
+  showing their own exact archive entry name.
+
+  Verified: column 1 confirmed in `Interactive` mode with the new
+  200px default; Format column tooltip confirmed listing all 3 real
+  stream file names correctly, newline-separated. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two more pieces per Keith:
+
+  **Merged Render/LOD menu**: "Render view should me merged with LOD
+  view, labeled as Render: Texture, Non-texture, Semi-Solid,
+  Wireframe, Show LOD only, Show Normals, Show Both." Replaced the
+  two separate buttons with one "Render" button and one menu
+  containing two independent exclusive action groups (render style
+  and LOD filter are orthogonal - e.g. Wireframe + Show Both is a
+  valid combination), separated by a divider - exact labels and order
+  as Keith specified.
+
+  Also implemented Semi-Solid as a real render mode, rather than
+  holding off on it as in an earlier pass. Added an `alpha_multiplier`
+  parameter to `DFFViewport._draw_solid` - when below 1.0, every
+  triangle is forced through the existing alpha-blend path (instead
+  of the opaque one) with its alpha scaled down uniformly, giving a
+  ghosted/see-through look distinct from Non-Texture's fully-opaque
+  flat shading. Wired into all 3 render dispatch points (single-model
+  view, DFF assembly view, world-instance display lists).
+
+  Verified: merged button confirmed showing all 7 items in the
+  correct order/grouping; Semi-Solid confirmed correctly reaching
+  `set_render_mode('semi_solid')` end to end.
+
+  **VC rotation confirmed, fix widened universally**: "the same
+  rotation issue is there, 32rot, I had to change to -32 to fix the
+  models position, this needs checking." Working the numbers the
+  same way as the original SA case: a raw quaternion whose euler yaw
+  computes to +32deg only aligns correctly at -32deg - the identical
+  z-sign-flip pattern found for SA, just now directly confirmed in
+  VC too. The earlier `scipy` cross-check was real and stays correct
+  (this codebase's own quaternion math is internally consistent with
+  the standard convention) but never actually proved that convention
+  matches RenderWare's on-disk one - that was an unwarranted leap
+  from "the math is self-consistent" to "VC is fine," which Keith's
+  direct report now corrects.
+
+  Removed the SA/SOL-only gate from `_conjugate_rotation_for_game` -
+  the conjugate now applies universally, still without touching the
+  stored `inst.rot_x/y/z/w` themselves (only rendering and the
+  Rotation spin boxes use the effective value, exactly as before).
+
+  Verified with Keith's own real VC data (`docks10`, `docks.ipl`):
+  effective rotation now correctly conjugated
+  `(-0,-0,-0.1908,+0.9816)`, yaw flips from +22deg to -22deg; raw
+  stored `rot_z`/`rot_w` confirmed unchanged. Full `QApplication`
+  instantiation clean, `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "option to hold control and
+  highlight ipl entries, right click load all selected .ipls." The
+  IPL Sections table defaulted to Qt's `SingleSelection` (never set
+  explicitly), so Ctrl/Shift-click couldn't build a multi-row
+  selection at all. Set `ExtendedSelection` + `SelectRows`; clicking
+  the eye-icon column still toggles that one row's visibility
+  immediately as before, but clicking the IPL File/Format columns
+  (what Ctrl/Shift-clicking to build a selection naturally lands on)
+  already only selected without any side effect - matched.
+
+  Added `_load_selected_ipl_sections` and a "Load Selected (N)"
+  context menu action (shown only when more than one row is
+  selected) - reuses the exact same per-row load-toggle a single
+  eye-icon click already triggers, applied across the whole
+  selection, skipping any row that's already visible (re-toggling an
+  already-visible row would hide it, the opposite of "load").
+
+  Verified: selection mode/behaviour confirmed set correctly; Load
+  Selected confirmed only toggling genuinely-hidden rows in a mixed
+  selection (one already-visible, one hidden) and correctly toggling
+  both in an all-hidden selection. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith's multi-part message:
+
+  **GTA3 rotation question**: "rotation bug fixed in SA and VC, do we
+  need to look at gta3?" Confirmed `_conjugate_rotation_for_game` no
+  longer has any game-specific gate at all (removed in the previous
+  pass, applies unconditionally to every game) - GTA3 is already
+  covered by the same fix, no separate work needed.
+
+  **Alpha textures re-raised**: confirmed the `GL_ALPHA_TEST` fix
+  from an earlier pass is still correctly in place in the code -
+  couldn't verify the actual visual result (no PyOpenGL in this
+  sandbox), logged as needing Keith's specific feedback in TODO.md.
+
+  **Mouse navigation direction bug**: "moving the mouse left, should
+  always reflect moving left in the viewpoint... mouse movement seems
+  to switch depending on viewing angle." Found the real cause in
+  `DFFViewport.mouseMoveEvent`'s middle-mouse pan handling: `self.
+  _pan_x`/`_pan_y` get applied via `glTranslatef` *before* the
+  scene's own `glRotatef(yaw,...)` in `paintGL`'s transform chain
+  (OpenGL applies transforms to geometry in the reverse of call
+  order, so the translate lands on the raw world-space coordinates
+  first) - meaning the raw screen-space drag delta was being used
+  directly as a world-space offset with zero yaw compensation. "Left"
+  only felt consistent from whatever one specific angle the camera
+  happened to be at when panning started.
+
+  Fixed by pre-rotating the screen-space delta by `-yaw` before
+  applying it - this exactly cancels the scene's own `+yaw` rotation
+  once applied, keeping the net pan direction locked to actual
+  screen-space regardless of viewing angle. Verified mathematically
+  (can't visually test OpenGL in this sandbox): dragging the same way
+  at yaw=0/45/90/180/270 all produced the identical net on-screen
+  displacement `(2.0, 0.0)` after running the full transform chain.
+
+  Also added a `_mouse_sensitivity` multiplier (applied to both
+  rotate and pan deltas) and a "Nav" button in IPL Controls opening a
+  small settings popup with a sensitivity slider - per Keith: "need a
+  way to toggle these settings, mouse strength, other needed
+  settings." Only sensitivity is wired up so far; logged to TODO.md
+  that "other needed settings" isn't specified yet.
+
+  Noted in TODO.md: `VehicleViewport` (a separate subclass, used by
+  Vehicle Workshop) has its own duplicate `mouseMoveEvent` with the
+  identical pan bug, unfixed - out of scope for this session but
+  flagged for later.
+
+  Full `QApplication` instantiation clean, `ast.parse` clean on both
+  files.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "as we're loading both
+  Generic files and this works, we don't need to show this in a
+  button, this can be replaced as an [Advanced] button." Replaced the
+  top-level "Generic.txd" button with an "Advanced" button/menu -
+  since the automatic `generic.ide` preloading already handles
+  generic.txd loading seamlessly (confirmed working in Keith's own
+  testing), manually loading it is now a rare/diagnostic action
+  rather than something needing a prominent button. Kept it available
+  as "Load Generic.txd Manually" under the new menu rather than
+  removing it outright, and this gives a natural home for other
+  advanced/less-common options later.
+
+  Verified: Advanced button confirmed present with the menu item
+  correctly wired to the existing handler. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Continuing through TODO.md per Keith's
+  "lets continue adding the rest of whats on the todo list":
+
+  Marked two items as resolved after investigation/confirmation:
+  the missing splitter bug (Keith confirmed already fixed), and the
+  "18px compact sizing" general clipping concern (audited every
+  `setFixedHeight(18)` call in the file - none affect a spinbox
+  outside the Item Editor Dialog case already fixed earlier).
+
+  Implemented the "pick/goto zoom settings" item: `_center_viewport_
+  on_instance`'s previously-hardcoded `40.0` zoom distance is now
+  `self._goto_zoom_distance`, exposed as a spinbox in the same Nav
+  settings popup added for mouse sensitivity. Verified: default
+  confirmed `40.0`; changing the setting and then calling
+  `_center_viewport_on_instance` confirmed the new value is actually
+  used (not the old hardcoded one). Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Solved "SA trees not showing alpha, VC
+  works" - Keith corrected my initial rotation-bug hypothesis: "its
+  not a rotation bug, its the alpha layer not working on the SA tree
+  models" (with a screenshot showing pale, blocky, uniformly-white
+  tree shapes - not what an alpha-cutout failure looks like, which
+  would still show the leaf texture's own color/pattern, just without
+  the transparent parts cut out; this looked like a texture-load
+  failure falling back to untextured white geometry instead).
+
+  Found the real cause: `_preload_generic_ide_textures` only ever
+  collected TXDs from objects whose `source_ide` matched
+  `generic.ide` literally. Keith's own screenshot's selected object
+  showed `Source dynamic2.ide` - SA vegetation objects are defined in
+  a different shared IDE entirely, so their TXDs were never being
+  preloaded at all, and fell back to untextured white geometry -
+  which looks exactly like "alpha not working" but is actually a
+  missing texture. Generalized the method to collect TXDs from every
+  loaded object regardless of which IDE file it came from, not just
+  ones literally named `generic.ide` - same principle as the earlier
+  generic.txd-specific fix, now applied to every shared IDE a loaded
+  world has.
+
+  Verified with objects spanning 3 different IDE files (`generic.ide`,
+  `dynamic2.ide` matching Keith's real example, and a hypothetical
+  vegetation IDE): all 3 distinct TXDs now correctly collected, where
+  the old filter would have only found the `generic.ide` one. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "then I need to find where
+  the tree textures are being stored." `_get_txd_textures` previously
+  returned a generic "an indexed IMG archive (e.g. gta3.img)" string
+  regardless of which archive a TXD actually came from, even though
+  `model_cache._txd_index` already tracks the real `(img_path,
+  entry)` per name (a list, since the duplicate-name merge fix - a
+  name can genuinely be indexed under more than one archive). Now
+  returns the actual archive path(s), joined with `; ` when there's
+  more than one, for all three statuses (found the path for `failed`
+  too, since it was found there, just couldn't be parsed).
+
+  Surfaced in the Item Editor Dialog's Identity section - hovering
+  the TXD status line ("dynjunk.txd is loaded" etc.) now shows a
+  tooltip with the exact archive path(s) it was found in, so which
+  specific `.img` a texture (tree TXDs included) actually lives in is
+  directly visible rather than needing to guess.
+
+  Verified with a multi-archive scenario: correctly returned both
+  paths joined together for a name indexed in two different
+  archives. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Two pieces per Keith's binary IPL
+  follow-up:
+
+  **Format column redesign**: "instead of text + 6, with tooltop for
+  LAe_Stream0.ipl, have the first LAe_Stream0 as the first name +5,
+  with the tooltop showing the other 5." Changed from "Text + N
+  Binary Streams" (generic count) to showing the first stream's own
+  name directly plus a "+N" suffix for the rest, sorted for
+  predictable ordering (stream0 first) - the tooltip now lists only
+  the *remaining* entries, not repeating the one already visible in
+  the cell. Verified with 3 stream files: cell correctly reads
+  "LAn2_stream0 +2", tooltip correctly lists only stream1/stream2.
+
+  **Actual binary IPL loading**: "we need to be able to load these
+  binary IPLs, so right click, show the list, to load from." Added
+  `_load_binary_ipl_stream` - reads the entry's raw bytes from its
+  actual archive (now tracked as `(archive_path, entry_name)` tuples
+  rather than plain names, needed to know which archive to re-open),
+  parses via the already-existing `BinaryIPLParser`, resolves each
+  instance's `model_name` from the loaded world's own IDE objects
+  (binary IPLs only ever encode `model_id`, never a name), merges the
+  new instances into `_all_instances`, registers the stream as its
+  own normal section (visible, its own row) rather than staying
+  folded under its parent's Format-column count, and refreshes the
+  view. Wired into the context menu: a "Load Binary Stream" submenu
+  listing every associated stream file for a text IPL with one or
+  more, or a direct action for a standalone binary entry.
+
+  Verified end-to-end with a real synthetic binary IPL (correct magic
+  bytes, header, one instance record): instance count, resolved model
+  name, and parsed position all confirmed correct; entry confirmed
+  registered as its own visible section; visibility filter confirmed
+  re-applied. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — First TOBJ support, per Keith: "lets
+  start support tobj first, with a time switch under Ignore Scaling,
+  on the IPL Sections pane."
+
+  Found and fixed a real parsing gap first: `IDEParser._parse_line`
+  stopped extracting fields right after `flags` for both `objs` and
+  `tobj` sections - `tobj`'s own two extra fields (`time_on`/
+  `time_off`, the hour range 0-23 an object is actually visible
+  in-game) were being silently dropped entirely, never parsed at all.
+  Now extracted specifically for `tobj` entries. Verified: a realistic
+  tobj line correctly yields `time_on`/`time_off`; a plain `objs` line
+  is confirmed unaffected (no time fields, as expected).
+
+  Added the Time switch (checkbox + hour spinbox, 0-23) right after
+  Ignore Scaling in IPL Controls - "Ignore Scaling" actually lives
+  there rather than in IPL Sections specifically, likely a naming
+  mix-up between the two adjacent docks, so placed it at the concrete
+  "under Ignore Scaling" reference point given. When off, every TOBJ
+  instance shows regardless of time (unchanged from before this
+  feature existed); when on, a TOBJ instance only shows if the
+  selected hour falls within its `time_on`/`time_off` range - non-TOBJ
+  instances are never affected either way. Chained
+  `_apply_tobj_time_filter` into the same visibility pipeline the LOD
+  filter already uses.
+
+  Verified with a realistic day/night-lamp scenario (including the
+  common overnight-wrap case, e.g. `time_on=20, time_off=6` meaning
+  visible 20:00 through 05:59): switch off passes all 3 test
+  instances through; hour=22 (night) correctly shows the night lamp
+  and the always-visible regular object, hides the day-only one;
+  hour=12 (day) correctly does the reverse. UI widgets confirmed
+  constructed correctly, spinbox starts disabled and enables when the
+  checkbox is checked. Full `QApplication` instantiation clean,
+  `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "put time and nav under on a
+  new line." IPL Controls' Time switch and Nav button had ended up on
+  the same crowded row as Ignore Scaling/Advanced/Render/LOD - moved
+  both to their own second row (opts_row2) below it. Verified
+  widgets still construct and function correctly (checkbox/spinbox
+  enable-on-check behavior unchanged). Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Full time-flow controls, per Keith: "time
+  is hard to see, we need a [play] and [stop] and Settings [*] Cog
+  for time settings, we need to impliment movement of time, so we can
+  see the switching of tobjs on the map."
+
+  Replaced the plain 0-23 hour spinbox with a `QTimeEdit` (HH:MM,
+  more readable and gives real sub-hour precision) at 24px height -
+  the previous 18px was clipped like every other spinbox found this
+  session (spinboxes need more room than the 18px button standard).
+  Added Play/Stop buttons wired to a real `QTimer`: Play auto-enables
+  the Time switch (playing with the filter off wouldn't show anything
+  changing) and starts the timer; each tick advances the simulated
+  time by a configurable number of in-game minutes and re-applies the
+  visibility filter, so TOBJ switching is now visible live as time
+  passes rather than only on manual edits. Added a Settings ("*")
+  button opening a popup with two independent rates - in-game minutes
+  per tick, and real seconds per tick - giving the "1 min for every
+  Second adjustable" flow rate from the existing TODO item, not a
+  single fixed ratio.
+
+  Verified end-to-end: `QTimeEdit` confirmed at 24px; Play confirmed
+  auto-checking the Time switch and starting the timer; a manually-
+  triggered tick confirmed advancing 12:00 -> 12:01; Stop confirmed
+  halting the timer; settings popup confirmed running without
+  crashing. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+  Day/night shading and 2DFX-lighting-at-night are still open,
+  logged in TODO.md as needing their own rendering-side design pass -
+  genuinely separate from this time-control infrastructure (visual
+  lighting/ambient changes, not just which instances show/hide).
+
+- **Aug 1, 2026 (cont'd)** — Fixed LOD Show-Only/Show-Normals doing
+  nothing for SA data, per Keith: "when LOD only is set, it still
+  loads everything, when Norm is set, it loads the lods aswell,
+  filenames for lods, Start of LOD or lod." Same lesson as the
+  rotation conjugate fix earlier this session: `resolve_lod_pairs`'s
+  two detection strategies (lod_index field vs "LOD" name-prefix
+  matching) were mutually exclusive by game, with SA/SOL gated to
+  lod_index only - but Keith's own real SA data (`LODroadB48` from
+  `LAe.ipl`) always has `lod_index=-1` in practice, and its own model
+  name confirms SA uses the same "LOD" prefix convention as GTA3/VC.
+  Widened both strategies to run for every game and combine their
+  results, rather than being gated by game at all.
+
+  Verified with Keith's real SA example: `resolve_lod_pairs` now
+  correctly pairs `roadB48`/`LODroadB48` despite `lod_index=-1`; Show
+  LOD only correctly returns just the LOD instance, Show Normals
+  correctly returns just the base one - both previously did nothing
+  for this data. Full `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Rounded out TOBJ support per Keith's
+  "lets complete the tojs, everything needed to get that work":
+
+  The TOBJ popup (Item Editor Dialog's "TOBJ (n)" button) previously
+  showed only name/ID/source, missing the actual time range - the
+  core info a "timed object" popup should lead with. Now shows
+  "visible HH:00-HH:00" for each entry that has `time_on`/`time_off`
+  parsed. Verified: a real tobj entry (time_on=20, time_off=6)
+  correctly produces "streetlight01 (ID 1234, veg.ide line 42) -
+  visible 20:00-06:00".
+
+  Noted (not changed, already correct as-is): `get_tobj_for_model`
+  groups by the queried model_id, and each TOBJ IDE entry has its own
+  unique model_id (day/night variants of the same real-world object
+  are separate IDE entries, linked only by shared placement position
+  via separate IPL instances, never a shared model_id) - so this
+  mostly surfaces just the current object's own entry rather than an
+  actual paired variant, which is expected rather than a bug to fix.
+  Confirmed two other pieces already worked correctly without needing
+  changes: the raw IDE line shown in the Identity section already
+  picks up `time_on`/`time_off` automatically (it iterates the
+  parsed object's own `extra` dict, which now includes them since the
+  parsing fix); the IDE Objects table in Object Browser reads raw
+  file text directly rather than going through the parser, so it was
+  already showing every field verbatim regardless.
+
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — 2DFX lighting at night, per Keith:
+  "lets add the 2dfx support next, showing 2dfx lighting at night."
+
+  Found the real starting gap: 2DFX IDE entries were being parsed as
+  a placeholder stub with completely empty `extra={}` - no offset,
+  color, or type data at all, which can't support rendering an
+  actual light. Implemented real parsing for `effect_type == 0`
+  (light) entries: local offset (x,y,z), RGBA color, and best-effort
+  `corona_far_clip`/`point_light_range`/`corona_size` (lower
+  confidence on the exact field order/count for these SA-specific
+  extras beyond the core offset+color+type, since no real 2DFX
+  sample data was available to verify against, unlike the rotation/
+  LOD fixes earlier this session which had Keith's actual raw lines
+  to check). Other effect types (particle, text, roadsign, etc.)
+  aren't parsed beyond their own offset/type - not needed for
+  lighting specifically.
+
+  Added `DFFViewport.set_2dfx_lights`/`_draw_2dfx_lights` - renders
+  each light as a glowing point (`GL_POINTS` with additive blending,
+  no depth writes - deliberately simple/reliable over sprite/
+  billboard geometry, needs no UV/texture setup). Added `ModelWorkshop
+  ._refresh_2dfx_lights`, wired into the same visibility-filter
+  pipeline the LOD/TOBJ filters already use (and therefore also into
+  every time-flow tick automatically) - collects light-type 2DFX
+  entries for currently visible instances, computes each one's world
+  position (instance position + its local offset rotated by the
+  instance's own quaternion, since a light's offset is defined in its
+  owning model's local space and has to rotate with it), and gates
+  showing them on "night" (hour >= 20 or hour < 6) only when the Time
+  switch is actually on - with it off, lights show regardless of
+  time, matching how TOBJ objects themselves behave in that case.
+
+  Verified thoroughly: the offset rotation math cross-checked against
+  `scipy` (exact match, same verification standard as the rotation
+  bug fixes); full pipeline tested with the Time switch off (always
+  shows), on at daytime (correctly empty), and on at night (correctly
+  shows, world position confirmed as instance position + rotated
+  offset, color/size confirmed passed through). Couldn't visually
+  verify the actual OpenGL glow rendering (no PyOpenGL in this
+  sandbox) - needs Keith's live confirmation.
+
+  Logged the separate Model Workshop 2DFX *editor* (a different
+  component - editing a model's own 2DFX entries, not Map Workshop's
+  display of them) to TODO.md as its own substantial feature, not
+  started.
+
+- **Aug 1, 2026 (cont'd)** — Fixed a real crash/freeze bug in binary
+  IPL loading, plus two follow-on display fixes, per Keith: "there is
+  a bug in loading IPL, the app freezes, no dialog status, plus ive
+  noticed the ipl's not linked to the other data files. that show as
+  just Binary IPL. single binary files should just show as there file
+  name. [COL] truthsfarm.ipl failed to load - Unknown IPL:
+  img:gta3.img:truthsfarm.ipl."
+
+  Found the exact cause: toggling the eye icon on any binary-sourced
+  row called `_ensure_ipl_loaded`, which always tried the *text* IPL
+  loading path (`loader.load_ipl_by_name(stem)`) - but a binary IPL's
+  stem is a synthetic `"img:<archive>:<entry>"` string, never a real
+  entry in `loader.available_ipls` the way a text IPL's stem is, so
+  this could only ever fail with exactly the "Unknown IPL" error
+  Keith hit. Fixed by detecting the `"img:"` stem prefix and routing
+  to the already-existing `_load_binary_ipl_stream` instead. Added
+  `self._loaded_binary_ipls` to track which binary IPLs have actually
+  been loaded (separate from `loader.loaded_ipls`, which only ever
+  knows about text IPLs), guarded in both `_ensure_ipl_loaded` and
+  `_load_binary_ipl_stream` itself against double-loading (which
+  would otherwise duplicate every instance on a second toggle/right-
+  click).
+
+  Also fixed the Format column showing nothing at all once a
+  standalone binary IPL was actually loaded (it gets removed from
+  `_binary_ipl_names`, "now genuinely loaded, not just listed", which
+  was falling through every branch to an empty string) - now checks
+  `_loaded_binary_ipls` too, keeping the filename shown either way.
+
+  And per Keith's specific display request: standalone (unlinked)
+  binary IPLs previously showed the generic label "Binary IPL" in the
+  Format column - now show the file's own name instead, matching how
+  linked stream files already display their real names.
+
+  Added "Save Binary IPL as Text..." to the right-click menu (shown
+  once a binary IPL is actually loaded) - a diagnostic export writing
+  the real parsed instances out as a standard text-format .ipl file,
+  so the binary parser's actual output can be inspected/compared
+  against a known-good file rather than trusted blindly.
+
+  Verified end-to-end against Keith's exact bug scenario (a
+  standalone `truthsfarm.ipl` binary entry, eye-icon toggle): instance
+  count and resolved model name both confirmed correct (previously 0
+  instances with the Unknown IPL error); double-toggle confirmed not
+  duplicating; Format column confirmed showing "truthsfarm" both
+  before and after loading; the text export confirmed producing a
+  correctly formatted SA-style `.ipl` file. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Found and fixed the real root cause
+  behind "app freezes, no dialog?" after a binary IPL load that had
+  actually succeeded, per Keith: "[COL] Loaded barriers1.ipl: 8
+  instances (8 model names resolved) nothing, but a frozen app, no
+  dialog? and just noticed [COL] this isnt col workshop."
+
+  `ModelWorkshop` never had a working status bar at all.
+  `setup_ui`'s status-bar block was gated on `if hasattr(self,
+  '_setup_status_indicators'):` - that method is only ever actually
+  defined in TXD Workshop (`txd_workshop.py`), not `ModelWorkshop` or
+  any of its mixins, so the check silently evaluated `False` and no
+  status widget was ever built. Every single `_set_status(...)` call
+  this entire session - every load/preload status message referenced
+  throughout this changelog - has only ever printed to the console
+  via `_set_status`'s own fallback branch (which is also where the
+  confusing "[COL]" prefix came from, a leftover generic label for
+  that fallback), never shown anywhere in the actual UI. A real,
+  successful load like this one looked exactly like nothing happened
+  at all, because nothing *visible* did.
+
+  Fixed by wiring in the existing `_create_status_bar` method
+  (previously built but also never called) instead of the dead check
+  - it sets `self.status_label`, the first thing `_set_status` already
+  looks for. Also cleaned up the `[COL]` fallback prefix to `[Map
+  Workshop]`, though that branch should now be unreachable in normal
+  operation.
+
+  Found this is a shared, cross-component bug, not unique to Map
+  Workshop - Model Workshop and COL Workshop have the identical dead
+  `hasattr` check in their own `setup_ui`, logged to TODO.md as
+  needing the same fix, not yet applied there.
+
+  Verified: `status_label` confirmed to now actually exist on a real
+  `ModelWorkshop` instance (previously didn't); `_set_status` with
+  Keith's exact message text confirmed correctly reaching
+  `status_label.text()`. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Fixed the IPL Inst File pane showing
+  nothing for binary IPLs, per Keith: "loading LAe2.ipl, i can see
+  the ipl data below in the ipl inst file pane, when clicking on a
+  binary ipl, I should still beable to see the ipl lines aswell,
+  loading should be the same behavour as the data ipls. go from gray
+  to white."
+
+  Found the cause: `_refresh_ipl_inst_file_panel` only ever read a
+  selected IPL's raw text file via `loader.available_ipls` - a binary
+  IPL's synthetic stem was never an entry there (there's no raw text
+  file to read for one), so this fell straight through to an empty
+  table every time, regardless of whether the binary IPL had actually
+  loaded successfully. Fixed by detecting a binary-sourced stem
+  (`"img:"` prefix), auto-loading it via the already-existing
+  `_load_binary_ipl_stream` if not already loaded (matching how
+  simply selecting a text IPL "just works" without a separate load
+  step - "loading should be the same behavour as the data ipls"),
+  then building the table directly from its actual parsed instances
+  in `self._all_instances` rather than any file - same 13-column
+  layout the text-IPL path already uses, just sourced differently.
+
+  Confirmed the "gray to white" visibility styling already applies
+  correctly to binary rows without needing a separate fix - `_style_
+  ipl_name_item` is generic/uniform per-row regardless of source, and
+  `_rebuild_ipl_sections_rows` (which `_load_binary_ipl_stream` already
+  calls) re-applies it for every row on load.
+
+  Verified end-to-end with Keith's own `LAe2.ipl` example: IPL Inst
+  File pane went from 0 rows (before) to correctly showing the real
+  parsed instance (model ID/name/position/rotation all correct) on
+  first click, with no separate load step; instance confirmed
+  registered as loaded and visible; hidden-vs-visible foreground
+  colors confirmed genuinely different (`#8a8a96` gray vs `#ffffff`
+  white). Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Found and fixed the real cause of the
+  reported freeze, using Keith's own Ctrl+C interrupt traceback (not
+  actually a binary IPL parsing issue - the trace showed it hung
+  inside `_apply_ipl_visibility_filter -> _refresh_world_view ->
+  _preload_generic_ide_textures -> ... -> model_cache._read_entry ->
+  IMGFile._open_version_2 -> entry.set_img_file`): `_read_entry` was
+  opening its IMG archive fresh on *every single call*, on the stated
+  (and here, wrong) assumption that this was cheap. `IMGFile.open()`
+  has to parse the archive's entire directory table (potentially
+  thousands of entries for `gta3.img`), and `_preload_generic_ide_
+  textures` (generalized earlier this session to cover every distinct
+  TXD across a whole loaded world, not just `generic.ide`'s own) can
+  call `_read_entry` hundreds of times in one preload pass for a full
+  map - hundreds of full directory re-parses of the same archive is
+  exactly what turns into a multi-minute hang with zero visible
+  progress.
+
+  Added `ModelCache._opened_img_files` (archive path -> already-opened
+  `IMGFile`), reused by `_read_entry` instead of re-opening every
+  time - the expensive directory parse now happens once per archive
+  per session. `index_img_files` (which already opens every archive
+  once anyway, to build the name indexes) now caches that same opened
+  instance too, so the very first texture lookup doesn't even need a
+  second open. `clear_indexes` clears this cache too, alongside the
+  other per-world caches it already resets.
+
+  Verified directly: 50 simulated `_read_entry` calls against the
+  same archive now correctly call `IMGFile.open()` exactly once
+  (would have been 50 times before this fix). Full `ast.parse` clean
+  on both files.
+
+- **Aug 1, 2026 (cont'd)** — Added recent DAT files, per Keith: "when
+  loading Dat files, standalone, remember past files." Added `recent_
+  dat_files` to `MapSettings.DEFAULTS` (most recent first, deduped,
+  capped at 10), populated by `_add_recent_dat_file` on every
+  successful `_load_game_dat_file` call, persisted via the existing
+  JSON settings file. Added a separate "Recent" dropdown button next
+  to Load in the DAT tab (not attached to Load itself, since
+  `QPushButton.setMenu()` would make the whole button open the menu
+  on click, overriding Load's own "open file dialog" behaviour) -
+  lists recent paths, each re-triggering `_load_game_dat_file` with
+  that path preset, plus a "Clear Recent Files" action.
+
+  Verified: menu correctly shows the empty-state placeholder with
+  nothing loaded yet; two adds correctly ordered most-recent-first;
+  re-adding an already-recent path correctly moves it to the top
+  instead of duplicating; clear correctly empties the list. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "when clicking on a binary
+  ipl, i should beable to see this, and have an option to save it to
+  name_me.ipl." The IPL Inst File pane already shows a binary IPL's
+  data on click (fixed in an earlier pass this session), but the
+  "Save Binary IPL as Text" option only lived in the IPL Sections
+  table's own right-click menu, not reachable from the IPL Inst File
+  table itself, where the data is actually being looked at.
+
+  Generalized the export method (renamed `_save_binary_ipl_as_text`
+  -> `_save_ipl_data_as_text`, works identically regardless of
+  whether the source was binary or text, since both end up as the
+  same `IPLInstance` objects either way) and added "Save IPL Data
+  As..." to the IPL Inst File table's own context menu, using
+  whichever row is currently selected in IPL Sections. The save
+  dialog already lets the user type any filename they want (e.g.
+  `name_me.ipl`) - not limited to reusing the source's own name.
+
+  Verified end-to-end: the save dialog correctly suggests the
+  source's own name as a starting default, and correctly saves
+  whatever path is actually chosen (tested saving as `name_me.ipl`);
+  saved content confirmed matching the real loaded instance data.
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added "Show" jump-to-line icons in the
+  Item Editor Dialog's Identity section, per Keith: "have a show
+  icon, before IPL and before IDE rows, that bring up the IPL /IDE
+  editors, there it says line (343) highlight the line in either
+  editor."
+
+  Added a small Show icon button before each of the IPL and IDE raw
+  lines - clicking one switches Object Browser to the matching tab,
+  selects that instance/object's own source file in IPL Sections /
+  the IDE file list, and highlights + scrolls to the exact row
+  matching its real file line number.
+
+  This needed real line-number tracking that didn't exist before:
+  `_extract_ipl_section_text` and `_refresh_ide_objects_panel`'s
+  parsing loops previously discarded each line's original position in
+  the file entirely, only building the displayed table row-by-row in
+  order. Changed `_extract_ipl_section_text` to return `(line_no,
+  raw_line)` tuples instead of a joined string, and both refresh
+  methods now stamp each row's column-0 cell with its real 1-based
+  file line number (`Qt.ItemDataRole.UserRole`) - what the new
+  `_select_and_scroll_to_line` searches for.
+
+  Added `_jump_to_ipl_line`/`_jump_to_ide_line`, both reusing
+  `_on_object_browser_tab_changed` (the existing IMG/DAT/IDE/IPL
+  button handler) for the tab switch itself, then locating the
+  matching source file and calling the shared line-search helper.
+
+  Verified end-to-end with real 3-line IPL and IDE files: jumping to
+  line 3 of each correctly selected the row for the object actually
+  on that line (not just any row), and the IDE jump correctly
+  switched the shared table into "IDE Objects" mode along the way.
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added per-step status visibility for the
+  ~2 minute post-parse hang Keith reported: "there is a long hang
+  between ipl dialog loading, it reads the last line, then nothing
+  for 2 mins, i'd like to know what it's going, paring, sorting,
+  something other then think its silently crashed."
+
+  Found `_apply_loaded_world` ran its entire post-parse pipeline
+  (resolve LOD pairs, index every IMG archive, apply the LOD filter,
+  build the Instance List, refresh the world view, populate IPL
+  Sections/Object Browser/IDE/DAT/IMG tabs, refresh IPL Inst File) as
+  one unbroken sequence, with only a single status message at the
+  very start and zero `QApplication.processEvents()` calls anywhere
+  in between - meaning even if a status message had been set for a
+  later step, the UI genuinely could not repaint to show it until the
+  entire sequence finished, since Qt's single-threaded event loop
+  never got control back. Added a status message plus `processEvents
+  ()` before each major step, so whichever one is actually slow will
+  now show up as a real, visible, stuck-on message rather than
+  everything looking identically frozen.
+
+  Reviewed the two most likely culprits for actual algorithmic cost
+  given a large map (`resolve_lod_pairs`, widened to a second,
+  name-matching strategy earlier this session, and Object Browser/
+  Instance List population) - neither showed an obvious O(n²) pattern
+  on inspection (LOD pairing is close to linear per source file;
+  Object Browser's model properly uses beginResetModel/endResetModel;
+  Instance List resolves TXD names lazily per-cell rather than
+  upfront). Didn't find a smoking gun to fix directly - the
+  instrumentation itself is the more reliable next step, since it'll
+  show exactly which real step is slow on Keith's actual data rather
+  than requiring a guess.
+
+  Verified the full pipeline end-to-end with a mock loader: every
+  expected status message appears in order, confirming instrumentation
+  reaches every step. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Four real bugs fixed from Keith's latest
+  screenshots/report:
+
+  **1. Garbled/overlapping Identity section text**: the plain "while
+  count(): item = takeAt(0); if item.widget(): deleteLater()" pattern
+  used to clear the section before repopulating only handled direct
+  widget items - `item.widget()` returns `None` for a nested-layout
+  item (the IPL/IDE row `QHBoxLayout`s added earlier this session for
+  the Show buttons), so those rows' old labels/buttons were never
+  actually removed on repeated calls (once per instance selection
+  change) - just silently orphaned, still visually parented to the
+  section box, piling up underneath/overlapping each newly-added row.
+  Added `_clear_layout_recursive` (handles nested layouts properly,
+  and `hide()`s widgets immediately rather than relying solely on
+  `deleteLater()`, which only schedules destruction for a later event
+  loop pass - the old widget stays visible at its old position in the
+  meantime otherwise). Verified: cycling between two instances 5 times
+  now leaves exactly 4 *visible* labels matching the current
+  selection, not accumulating stale ones underneath.
+
+  **2. 2DFX light offset using the wrong rotation**: "2dfx lighting
+  isn't parsing correctly, the light spot is fine on some lampposts,
+  but wrong on others, an axis issue like the rotation bug." Found
+  `_refresh_2dfx_lights` was rotating each light's local offset by
+  the *raw* stored quaternion (`inst.rot_x/y/z/w`), while the model's
+  own geometry renders using `_effective_rotation`'s *conjugated*
+  value - identical for a near-identity rotation (why some lampposts
+  looked fine), diverging for any genuinely rotated instance (why
+  others didn't) - the exact same lesson as the original rotation bug,
+  just missed in this newer code. Fixed to use the effective rotation.
+  Verified with a real rotated SA-style instance: the fix produces a
+  different (correct) world position than the old raw-quaternion
+  version would have.
+
+  **3. Multi-clump models missing most of their geometry**: "streetlights
+  are multi clump objects... show broken... traffic lights show in a
+  broken state." Found `_refresh_world_view` only ever converted
+  `dff_model.geometries[0]` - any multi-part model (separate pole/
+  arm/housing parts, each its own `Geometry`) had every part after
+  the first silently dropped entirely. Now merges every geometry:
+  vertices/normals/uvs/prelit colors concatenated, triangle vertex
+  indices and material indices offset per-geometry to stay correct
+  in the combined arrays, with white-padding for any geometry lacking
+  its own prelit colors when at least one other geometry in the same
+  model has them (otherwise a mixed colored/uncolored multi-part
+  model would misalign prelit data against vertices). Doesn't apply
+  per-atomic/frame transforms between parts - assumes each geometry's
+  vertices are already in correct model-local space, which covers
+  simple static multi-part props but not models relying on genuine
+  frame-hierarchy transforms between parts; noted as a possible
+  further refinement if some models still look wrong. Verified with a
+  realistic 2-geometry model: combined vertex count correct, second
+  geometry's triangle indices correctly offset rather than colliding
+  with the first's.
+
+  **4. 2DFX master toggle**: "so lets switch to 2dfx, there needs to
+  be a 2dfx button near the time, play, stop." Previously 2DFX lights
+  had no way to be fully disabled - with the Time switch off they
+  always showed regardless of time; with it on, only the day/night
+  gating applied. Added an actual master "2DFX" checkbox next to Time/
+  Play/Stop/Settings, checked first in `_refresh_2dfx_lights` before
+  any time-based logic - off means no lights show at all regardless
+  of the Time switch; on preserves the existing night-gating exactly
+  as before. Verified: toggling it off/on correctly clears/restores
+  the light list.
+
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two more real bugs, one reported by
+  Keith directly with a traceback, one from his own question:
+
+  **Time-flow "freeze" (bug, not a limitation)**: "touching time,
+  tick, 12:00 [Play] Appears to freeze things? bug or limitation?"
+  Found `DFFViewport.set_world_instances` unconditionally discarded
+  every previously-compiled OpenGL display list on *every single
+  call* - correct for a genuine new world/IPL load, but this same
+  method also runs on every TOBJ time-flow tick and every 2DFX
+  toggle via `_refresh_world_view`, none of which change which
+  distinct models exist - only which instances of them are currently
+  visible. Recompiling every distinct model's display list once a
+  second (the default tick interval) for a map with many models is
+  exactly the freeze. Added `clear_display_lists` parameter, threaded
+  through `set_world_instances` -> `_refresh_world_view` ->
+  `_apply_ipl_visibility_filter`, defaulting to `True` (unchanged for
+  real loads) but passed `False` from the Time toggle, Time value
+  change, 2DFX master toggle, and every time-flow tick specifically.
+  Verified: a simulated time-flow tick now correctly reaches
+  `set_world_instances` with `clear_display_lists=False`, while a
+  plain/default call (a genuine load) still correctly defaults to
+  `True`.
+
+  **Lighting crash (`IndexError: tuple index out of range`)**: Keith
+  logged a real traceback as a `#TODO` comment - crashed at `ld[3]`
+  in `_setup_lighting`, which always expects a 4-element `(x,y,z,w)`
+  light direction. Traced to the Light Setup Dialog's live-preview
+  handler (`_apply_live`) building only a 3-element `(lx,ly,lz)`
+  direction vector from the position picker and assigning it straight
+  to `vp._light_dir`, overwriting `DFFViewport`'s correct 4-element
+  default and crashing the very next `paintGL` call. Found and fixed
+  three more of the same pattern while tracing it: the dialog's own
+  cancel-path fallback default, and `_load_viewport_light_settings`
+  (which only ever saves/loads `dir_x/y/z` in its JSON config, never
+  a `w` component). All four now consistently build 4-element tuples
+  with `w=0.0` (directional light), matching `DFFViewport`'s own
+  convention. Verified by directly reproducing Keith's exact crash
+  with the old 3-tuple (confirmed it raises the identical
+  `IndexError`) and confirming the new 4-tuple works correctly.
+  Removed Keith's `#TODO bug` comment now that the underlying issue
+  is fixed.
+
+  Full `QApplication` instantiation clean, `ast.parse` clean on both
+  files.
+
+- **Aug 1, 2026 (cont'd)** — Debugged the continued binary IPL freeze
+  Keith reported after the earlier fix, per: "the is still an issue
+  with the binary ipl, even if I click on them, everything freezes,
+  we need to debug this, or atleast check our parser can decode the
+  binary.ipl, and read them, and in time write data to the binary.ipl,
+  and make our own binary ipls."
+
+  Found a fresh instance of the same performance bug class already
+  fixed once this session in `model_cache._read_entry`: both `_load_
+  binary_ipl_stream` (runs when clicking/loading a binary IPL) and
+  `_scan_binary_ipls_in_img_archives` (runs on *every* world load,
+  scanning every archive for binary entries) always created a fresh
+  `IMGFile` and called `.open()` unconditionally - re-parsing the
+  entire archive directory table from scratch every single time,
+  rather than reusing the already-open archive `model_cache` (or an
+  earlier call to either of these same methods) might already have
+  cached. Both now check `model_cache._opened_img_files` first and
+  only open fresh if genuinely not cached yet, caching what they do
+  open for next time. Added status messages + `processEvents()` calls
+  around the read/parse steps in `_load_binary_ipl_stream` too, so a
+  slow archive read is at least visible rather than silent.
+
+  Added "Verify Binary Parser" - a right-click diagnostic (both for
+  standalone binary entries and stream files associated with a
+  parent text IPL) that reads and parses one entry exactly like a
+  real load does, but never touches `_all_instances` or the world
+  view - reports success/failure, instance count, any parser
+  errors/warnings, and a preview of the first few instances (model
+  ID, resolved name where possible, position). Directly answers "at
+  least check our parser can decode the binary.ipl."
+
+  Logged the binary IPL *writer* ("in time write data to the
+  binary.ipl, and make our own binary ipls") to TODO.md with the full
+  confirmed binary layout from `BinaryIPLParser`'s own docstring
+  (magic, header size, per-instance record format) - not started, the
+  read side needs to stay proven reliable first per that same
+  docstring, and several header fields/other sections' formats aren't
+  confirmed yet, which a real writer producing GTA-loadable files
+  would need worked out.
+
+  Verified the archive-reuse fix directly: with no cache, a load
+  correctly opens the archive once; with the archive already cached
+  (matching the real load pipeline, where `index_img_files` runs
+  before this), a load correctly reuses it with zero additional
+  opens, while instance loading still works correctly either way.
+  Verified "Verify Binary Parser" against a real synthetic binary IPL:
+  correctly reports success, instance count, the real "cull/zone/
+  other sections not yet supported" warning, and a resolved model
+  name in the preview. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Found the actual remaining freeze cause,
+  using Keith's own real binary IPL files (164 files, including the
+  exact `crack.ipl`/`countn2_stream1.ipl` referenced in `BinaryIPLParser`'s
+  own docstring) - per: "verify seems to show some, but load, freezes,
+  nor can I see the IPL data in the IPL inst file."
+
+  First, tested the parser directly against the real files to rule it
+  out: `crack.ipl` parses to exactly 60 instances in 0.0004 seconds,
+  `countn2_stream1.ipl` to exactly 355 - both matching the parser's
+  own documented claims precisely, zero errors, tested across 5 files
+  of varying size (2KB-16KB) with consistent clean results. The
+  parser itself was never the problem.
+
+  Found the real cause in `_load_binary_ipl_stream`'s final step:
+  `self._apply_ipl_visibility_filter()` was called with no arguments
+  at all, defaulting both `auto_fit` and `clear_display_lists` to
+  `True`. `clear_display_lists=True` unconditionally discards and
+  forces recompilation of *every* already-visible model's OpenGL
+  display list, not just the newly-loaded stream's instances - for an
+  already-loaded map with many distinct models, that's exactly the
+  freeze, the identical bug class already fixed for TOBJ time-flow
+  ticks earlier this session, just missed in this specific call site.
+  `auto_fit=True` was also re-framing the camera to the whole map's
+  bounding box on every single stream load. Fixed by passing
+  `auto_fit=False, clear_display_lists=False` here too.
+
+  Also found `_load_binary_ipl_stream` never called `_refresh_ipl_
+  inst_file_panel()` at all - explaining "nor can I see the IPL data
+  in the IPL inst file": the pane shows whichever row is currently
+  selected in IPL Sections, but doesn't automatically re-read after
+  new data loads elsewhere, so newly-loaded data stayed invisible
+  until a manual re-click. Added the explicit call.
+
+  Verified end-to-end against the real `crack.ipl` through the actual
+  loading pipeline: total load time under 10 milliseconds, 60
+  instances correctly loaded, `_apply_ipl_visibility_filter` confirmed
+  called with `(auto_fit=False, clear_display_lists=False)`, IPL Inst
+  File panel confirmed refreshed. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two more real fixes from Keith loading
+  `LAe.ipl`: "I see LOD file in the IPL inst, I have show norm
+  selected, so it should ignore any LOD suffick files. however there
+  is a ton of memory usage, and a very long delay, between the last
+  entry in the ipl, and it finally showing anything."
+
+  **LOD filter missing from the IPL Inst File table**: the Render/LOD
+  dropdown's Show Normals/Show LOD only/Show Both setting only ever
+  applied to the 3D world view (`_apply_lod_filter`, working on parsed
+  `IPLInstance` objects) - the IPL Inst File table (raw text lines
+  from the currently selected file) never checked it at all, showing
+  every line regardless. Added the same "starts with lod" filtering
+  directly on the raw text fields (model name is field index 1),
+  matching the convention `resolve_lod_pairs` already uses. Verified
+  across all three modes with a real mixed IPL file (roadB48/
+  LODroadB48/streetlight1): Show Normals correctly excludes
+  LODroadB48, Show LOD only correctly shows only it, Show Both
+  correctly shows all three.
+
+  **The freeze, found in its most-used location yet**: `_toggle_ipl_
+  section` - triggered by *every single* IPL show/hide toggle,
+  including the very first load of any IPL - was calling `_apply_ipl_
+  visibility_filter()` with no arguments, defaulting `clear_display_
+  lists` to `True`. This is the identical bug already found and fixed
+  in the TOBJ time-flow tick, the 2DFX toggle, and the binary IPL
+  loader this session - but this call site is the single most
+  frequently hit of all of them, likely explaining a large share of
+  the freeze complaints throughout this whole session. Audited every
+  remaining `_apply_ipl_visibility_filter()` call site in the file (5
+  more: add/remove instance placements, the per-nudge edit refresh,
+  LOD display mode changes, per-instance LOD overrides) - none of
+  them change the underlying model set, only which instances are
+  shown or their transforms, so all five now also correctly pass
+  `clear_display_lists=False`. The genuine new-world-load path
+  (`_apply_loaded_world` calling `_refresh_world_view` directly, not
+  through this method) is unaffected and still correctly defaults to
+  clearing.
+
+  Verified: `_toggle_ipl_section` confirmed now passing
+  `clear_display_lists=False`. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two more real fixes from Keith's own
+  crash trace and follow-up request:
+
+  **DXT1 decode freeze/memory**: Keith's Ctrl+C interrupt landed deep
+  inside `_decode_dxt1`'s per-pixel loop, with "memory used, doesn't
+  seem to get released." The size guard in `_parse_native_texture`
+  already caps dimensions at 4096x4096 (ruling out a runaway
+  allocation from corrupted data), but a single large legitimate
+  texture at that pure-Python per-pixel loop is still over 16 million
+  iterations, and `_preload_generic_ide_textures` can decode many
+  distinct textures in one pass. Added a vectorized numpy fast path
+  (numpy already a hard dependency of `map_workshop.py` itself, kept
+  optional here via try/except to preserve this file's own stated
+  "no external dependencies" design goal for other contexts).
+
+  First implementation used fancy-index scatter to place decoded
+  pixels into the output array - profiling found this was actually
+  *slower* than the original loop at every size tested (0.5-0.9x).
+  Rewrote using reshape/transpose/crop instead (valid whenever the
+  block count matches the full grid, i.e. the data wasn't truncated -
+  falls back to the scatter approach for the rare truncated case) -
+  this avoids the random-access memory pattern entirely, genuinely
+  2.7x-13x faster than the original loop across 256x256 through
+  2048x2048.
+
+  Verified extensively: byte-for-byte identical output to the
+  original loop-based decoder (kept as `_decode_dxt1_loop`, used
+  automatically as a fallback if numpy is ever unavailable) across
+  exact-multiple-of-4 dimensions, non-multiple-of-4 edge-block
+  clipping, truncated block data, and both the `c0>c1`/`c0<=c1`
+  palette branches. `_decode_dxt3`/`_decode_dxt5` have the identical
+  pure-Python pattern and likely the same issue - logged to TODO.md
+  rather than rushed through in the same pass.
+
+  **Memory usage on the status bar**: per Keith's follow-up, "i think
+  we also need to add a function on the statas bar, to show memory
+  usage" - added a right-aligned "Memory: N MB" label, updated every
+  2 seconds via a timer. Tries `psutil` first (not a pre-existing
+  dependency, so kept optional), falls back to reading `VmRSS`
+  directly from `/proc/self/status` on Linux, clears the label if
+  neither works rather than showing a wrong value. Also cleaned up
+  genuinely dead/broken leftover code in the same method (referenced
+  an undefined `col_data` variable, guarded by a condition -
+  `status_info` - that's never actually set anywhere).
+
+  Verified: label confirmed showing a real reading ("Memory: 130 MB")
+  immediately on construction, update timer confirmed active. Full
+  `QApplication` instantiation clean, `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Fixed the memory usage label to actually
+  be cross-platform, per Keith: "the memory fix would need to work on
+  any platform the user runs this app on." Previous fallback (when
+  psutil isn't installed) read `/proc/self/status` directly - Linux-
+  only, so a Windows or macOS user without psutil would see nothing
+  at all.
+
+  Now a proper 3-tier fallback, standard-library only past the first
+  tier: psutil if actually installed (most accurate); `resource.
+  getrusage(RUSAGE_SELF).ru_maxrss` (stdlib, covers both Linux and
+  macOS with no install needed on either - note this is *peak* RSS,
+  not live, so it only ever climbs, but that's still the useful
+  signal for spotting a freeze/leak, just won't drop back down after)
+  - correctly handles the platform-specific unit difference (Linux
+  reports KB, macOS reports bytes, decided via `sys.platform`); a
+  `ctypes` call to `GetProcessMemoryInfo` via `psapi.dll` (stdlib via
+  ctypes) for Windows, where `resource` doesn't exist at all. Clears
+  the label only if every tier genuinely fails.
+
+  Caught and fixed a real bug in my own first draft while testing:
+  both branches of the Linux/macOS unit conversion were accidentally
+  identical, silently defeating the whole platform check - found by
+  actually running the fallback path rather than trusting the code
+  by inspection.
+
+  Verified on this Linux environment: both the psutil path and the
+  stdlib fallback path (simulated psutil-not-installed) produce
+  sensible, close readings (130 MB vs 135 MB) confirming the KB->MB
+  conversion is correct. Verified the Windows `PROCESS_MEMORY_
+  COUNTERS` ctypes struct definition is syntactically valid and
+  matches the documented layout - the actual `GetProcessMemoryInfo`
+  syscall itself couldn't be executed from this Linux sandbox, so
+  that specific path is unverified end-to-end. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Investigated a blank Map Workshop window
+  with "QOpenGLWidget: Failed to create context", per Keith: "we have
+  a blank window in the last push." First confirmed neither of the
+  last two pushes touched anything OpenGL-related at all - the entire
+  diff across both was the status bar memory label (a `QLabel` +
+  `QTimer`) and DXT1 decoding math, neither of which creates widgets
+  or touches GL/surface-format code.
+
+  Found a real, plausible pre-existing cause instead: both `DFFViewport`
+  and `MapViewport` (the actual viewport classes, `MapViewport` used
+  for each world pane in `ModelWorkshop`'s multi-pane layout) set their
+  OpenGL format via a *module-level* `QSurfaceFormat.setDefaultFormat`
+  call, executed once at import time. Per Qt's own documented
+  requirement, this only reliably takes effect if it runs *before*
+  `QApplication` is constructed - true for Map Workshop's own
+  standalone `__main__` path, but Keith confirmed Map Workshop runs
+  *embedded as a tab inside IMG Factory's own main window* - meaning
+  IMG Factory's `QApplication` already exists before these Map
+  Workshop modules are ever imported, making the module-level call too
+  late to reliably apply.
+
+  Fixed both classes to also call `self.setFormat(_fmt)` directly on
+  each widget instance in `__init__` - this works correctly regardless
+  of import-order timing, removing the dependency on when `QApplication`
+  happens to be constructed relative to module import entirely.
+
+  Verified the format-setting fix itself directly: constructed
+  `QApplication` first (matching Keith's embedded scenario exactly),
+  then imported both viewport modules afterward - both widgets
+  correctly receive the expected profile/version. Could not fully
+  verify actual context creation succeeds end-to-end, since this
+  sandbox has no real GPU/display server either (reproduced the
+  identical "Failed to create context" message here too, confirming
+  it's a genuine no-GPU-available condition rather than a crash) -
+  Keith's own machine is the real test. Full `QApplication`
+  instantiation clean (app doesn't crash even when context creation
+  fails, it renders blank rather than erroring out - matching the
+  reported symptom exactly), `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Found the actual, definitive root cause
+  of the blank-window/context-failure issue, using Keith's terminal
+  log this time (not just the screenshot): "QRhiGles2: Failed to
+  create QRhi" appearing *before* the repeated "QOpenGLWidget: Failed
+  to create context" lines.
+
+  `map_workshop.py` (and every other individual workshop module -
+  `model_workshop.py`, `vehicle_workshop.py`, `col_workshop.py`, and
+  others) already sets `os.environ['QSG_RHI_BACKEND'] = 'opengl'` at
+  its own module level, specifically intending to force the desktop
+  GL backend and avoid exactly this GLES2 failure - but this only
+  actually works if that line runs before *any* `QApplication` is
+  constructed anywhere in the process. Every one of these workshops is
+  opened as a tab from inside an already-running IMG Factory - by the
+  time a workshop module is actually imported (when the user opens
+  that tab), IMG Factory's own `QApplication` already exists and has
+  already selected and locked in its RHI backend, so the workshop's
+  own env var setting was always too late to have any effect. This is
+  the same root architectural issue as the earlier `QSurfaceFormat`
+  timing fix, just for a different (RHI/Qt Quick, not classic
+  `QOpenGLWidget`) subsystem.
+
+  Fixed at the actual right place this time: `launch.py`'s own
+  `configure_display()`, called at the very start of `main()` before
+  `launch_imgfactory()` does anything else (including importing
+  `imgfactory.py` itself) - the one place in the entire process
+  genuinely guaranteed to run before any `QApplication` construction
+  anywhere. Sets `QSG_RHI_BACKEND=opengl` unconditionally (respecting
+  an already-set value, matching the existing pattern for `QT_QPA_
+  PLATFORM`/`DISPLAY` in the same function) rather than leaving it to
+  each individual workshop module's own too-late attempt.
+
+  This is a second, related fix alongside the earlier per-instance
+  `setFormat()` change (`DFFViewport`/`MapViewport`) - that one
+  addressed classic `QOpenGLWidget` context creation specifically,
+  this one addresses the separate Qt Quick/RHI backend selection the
+  terminal log actually showed failing first. Together they should
+  cover the most likely causes, though this still can't be verified
+  end-to-end without Keith's own GPU/driver setup - `launch.py`
+  parses cleanly and the fix is placed correctly, but the real test
+  is whether Map Workshop actually renders on his machine now.
+
+- **Aug 1, 2026 (cont'd)** — Reverted the status bar memory usage
+  feature entirely (both the initial addition and the follow-up
+  cross-platform fix), per Keith's request: "revert back to the last
+  fix, before where I said 'I think we also need to add a function on
+  the statas bar, to show memory usage.'" - part of isolating what's
+  actually causing the blank-window/context-failure issue by removing
+  the most recently added piece to test against a simpler baseline.
+
+  `_create_status_bar` restored to a plain "Ready" label only, no
+  memory display/timer; `_update_memory_status_label` and `_get_
+  memory_mb_stdlib` removed entirely. The DXT1 vectorization fix
+  (same commit as the original memory bar addition) is deliberately
+  kept - that's a separate, already-verified fix for a different real
+  crash, not part of what Keith asked to revert. The GL context timing
+  fixes (`DFFViewport`/`MapViewport` per-instance `setFormat()`,
+  `launch.py`'s `QSG_RHI_BACKEND` fix) are also kept, since diff review
+  already confirmed neither touches anything related to the memory bar.
+
+  Worth noting: even with the memory bar completely removed, this
+  sandbox's own instantiation test still shows "QOpenGLWidget: Failed
+  to create context" (expected here specifically, since this sandbox
+  has no real GPU either) - additional evidence, on top of the earlier
+  diff review, that the memory bar was never the actual cause. Full
+  `QApplication` instantiation clean, `ast.parse` clean, no dangling
+  references to the removed memory-bar code anywhere in the file.
+
+- **Aug 1, 2026 (cont'd)** — Reverted the GL context timing fixes too
+  (`DFFViewport`/`MapViewport` per-instance `setFormat()`, `launch.py`'s
+  `QSG_RHI_BACKEND` change), per Keith: "maybe revert back on more;
+  blank screen" - the window is still blank on his machine even with
+  those fixes in place, plus a new terminal log showing the same
+  "QOpenGLWidget: Failed to create context" repeated 4 times, then a
+  `KeyboardInterrupt` landing on `eventFilter`'s bare `def` line (same
+  arbitrary-landing-spot pattern as the earlier interrupt that landed
+  on `_update_memory_status_label`'s `def` line before that function
+  was ever entered) - consistent with the interrupt arriving while
+  genuinely stuck in native/GL code, not in any particular Python
+  function.
+
+  All three files (`launch.py`, `apps/methods/dff_viewport.py`,
+  `apps/components/Map_Editor/depends/map_viewport.py`) restored to
+  their exact state as of commit `66134bd` (before any of this
+  session's GL-related changes). This is a diagnostic step, not a
+  claimed fix - those changes addressed two real, genuine Qt timing
+  requirements (documented, verifiable from Qt's own behavior), but
+  neither actually resolved the blank window on Keith's real hardware,
+  so they're stripped back out to get to the simplest possible
+  baseline for isolating what's actually happening. The persistent
+  "Failed to create context" appearing identically in this sandbox's
+  own test both before and after every one of these GL-related changes
+  (this sandbox has no real GPU at all) reinforces that whatever is
+  actually failing on Keith's machine likely needs to be diagnosed
+  through what the terminal itself is willing to show, rather than
+  more speculative code changes.
+
+  Verified: all three files parse cleanly, no leftover references to
+  the reverted code, full `QApplication` instantiation still clean.
+
+- **Aug 1, 2026 (cont'd)** — Found and fixed a real, high-impact
+  performance bug behind the "long pause after loading closes" and
+  large memory jump Keith reported: "loading LAe.ipl sent the memory
+  from 5.6Gb to 8.2Gb interesting... once the loading dialog closed, a
+  long pause, thinking it was frozen, becuase the IPL file is
+  displayed, the long pause was about 2 mins."
+
+  `_refresh_world_view`'s geometry conversion (`DFFModel` ->
+  vertex/normal/uv/triangle/material Python lists the viewport
+  actually draws from) used a plain local dict, rebuilt fresh on
+  *every single call* to this method - not just when a new IPL loads,
+  but on every IPL show/hide toggle. `model_cache.get_geometry()`
+  itself was already cached (DFF parsing wasn't repeated), but the
+  conversion step was rebuilt from scratch every time regardless, for
+  every distinct model currently visible in the *whole* world, not
+  just whatever was actually just toggled - exactly explaining both
+  symptoms together: the multi-minute pause (rebuilding full vertex/
+  triangle lists for potentially hundreds of already-converted
+  models) and the multi-GB memory jump (each rebuild allocates a
+  fresh full set of these lists, on top of whatever hadn't been
+  garbage-collected from the previous rebuild yet).
+
+  Made this a real persistent cache on `self` instead
+  (`_geometry_conversion_cache`), surviving across calls - only
+  cleared in `_apply_loaded_world` when a genuinely new world loads
+  (a new game/DAT means the same model name could refer to entirely
+  different geometry), matching the same "toggling visibility never
+  needs a full rebuild, only a real new load does" reasoning already
+  applied to the display-list cache earlier this session.
+
+  Verified directly: 3 repeated calls to `_refresh_world_view` for the
+  same instance now correctly call `get_geometry()` only once (would
+  have been 3 times before); a stale cache entry is confirmed cleared
+  after simulating `_apply_loaded_world`'s new-world-load path. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added progress visibility to the "long
+  pause" phase itself, per Keith: "seems the long parse is loading
+  assets, maybe we should at that to the dialog, model and texture,
+  so we know its doing something."
+
+  `_preload_world_assets` already shows model/texture/IPL name in its
+  own progress dialog, but that dialog closes *before* `_refresh_world
+  _view`'s geometry conversion loop runs - which was the actual "long
+  pause" fixed earlier this session (previously rebuilding every
+  model's vertex/triangle data from scratch on every call; now cached,
+  but the *first* conversion of any genuinely new model still takes
+  real time and previously had zero status feedback at all). Added a
+  status message ("Loading model: {name} (texture: {txd})...") right
+  where a model is about to be converted for the first time, with
+  `processEvents()` so it's actually visible rather than only being
+  set right before a long block of work - already-cached models (the
+  common case after the first load) skip this and stay silent/fast,
+  since only genuinely new models take real time.
+
+  Verified: a first (uncached) call correctly shows the model+texture
+  status message; a second call for the same, now-cached model
+  correctly shows nothing (matching the "silent when already fast"
+  intent). Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Found and fixed a major, foundational IDE
+  parsing bug using Keith's real uploaded `LAe.ide`: "So the draw
+  distance is higher than 300 to be an LOD... 5454, laeLODds03,
+  lod2lae1, 1500, 0."
+
+  `objs`/`tobj` parsing had assumed field 3 was always a "mesh count"
+  determining how many draw-distance fields follow (`id, model, txd,
+  meshCount, dist1[, dist2], flags`) - checked against Keith's entire
+  real file (293 objs/tobj lines) and found this format never
+  actually occurs there at all: every single `objs` line is exactly 5
+  fields, every `tobj` line exactly 7 - `id, model, txd, drawdist,
+  flags[, time_on, time_off]`, with no count field whatsoever. The old
+  assumption meant every real draw distance (e.g. `150` in a normal
+  entry, `1500` in Keith's LOD example) was being read as a bogus
+  "N meshes" count, and the real flags value read as a bogus draw_dist
+  of 0 - exactly backwards, and exactly why draw-distance-based LOD
+  detection couldn't have worked against the old parsing at all.
+
+  Rewrote to match the verified format directly for the common 5/7-
+  field cases, with the old mesh_count-chain logic kept only as a
+  defensive fallback for an unrecognized field count (no confirmed
+  real-world evidence it's ever actually used, but not removed
+  outright in case some other game/file genuinely needs it).
+
+  Verified against Keith's own exact real lines: `draw_dist` now
+  correctly reads `1500.0` for his two LOD examples, `150.0` for a
+  normal (non-LOD) entry from the same file (well under his suggested
+  300 threshold), and the `tobj` line correctly extracts drawdist/
+  flags/time_on/time_off together. Full `QApplication` instantiation
+  clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added draw-distance-based LOD detection,
+  per Keith's real LAe.ide data: "they dont follow the same pattern as
+  those prefixed as LODelname... the draw distance is higher than 300
+  to be an LOD... So we need a setting: detect LOD by draw distance
+  higher than 300."
+
+  His own `laeLODds03`/`laeLODds04` examples don't match the "LOD"
+  name-prefix convention `resolve_lod_pairs` relies on at all (LOD
+  sits mid-name, not as a prefix) - and likely have no matching
+  "normal detail" counterpart to pair against by name+position either,
+  so the existing pairing model doesn't fit them. Added `lod_draw_dist
+  _threshold` to `MapSettings` (default 300.0, configurable rather
+  than hardcoded) and a new `_is_lod_by_draw_distance` check, applied
+  as a separate pass in `_apply_lod_filter` (world view) alongside the
+  existing name-pair logic, for any instance not already covered by
+  pairing - filtered by the same global Show Normals/LOD only/Both
+  mode, just without a specific counterpart to substitute in for it.
+  The IPL Inst File table's own LOD filter (added earlier this
+  session, name-prefix only) got the identical draw-distance check
+  too.
+
+  Verified against Keith's exact real data end-to-end in both places:
+  `laeLODds03` (draw_dist=1500) correctly detected as LOD despite the
+  name mismatch, correctly excluded from Show Normals and correctly
+  the only entry under Show LOD only, while a normal object from the
+  same file (draw_dist=150) is correctly unaffected. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added the real-time LOD test tool, per
+  Keith: "i'd like to add a model switching test where there is a
+  circle around the mouse pointer, size 300, anything in the circle
+  is normal models, everything outside is lod. in realtime."
+
+  Added `MapViewport._unproject_point`/`_screen_to_ground_position` -
+  a general ray-plane intersection (inverse of the existing
+  `_project_point`, using the same explicit numpy view/projection
+  matrices) that finds the world-space ground position under the
+  mouse cursor, working correctly across all view modes (Top/Side/
+  Front/Perspective) rather than special-casing the ortho Top view.
+  Verified via round-trip tests (project a known world point to
+  screen, unproject back, confirm it matches) for both ortho and
+  perspective camera modes - exact match in both.
+
+  Added a circle overlay (`_draw_lod_test_circle`, radius = the same
+  `lod_draw_dist_threshold` setting from the earlier draw-distance
+  LOD detection work) drawn at that ground position, updated on every
+  mouse move via a new callback (`set_lod_test_callback`, mirroring
+  the existing `set_pick_callback` pattern - MapViewport doesn't need
+  to know anything about LOD pairing/detection itself).
+
+  Added a "LOD Test" toggle next to the Render/LOD dropdown in IPL
+  Controls. While active, `ModelWorkshop._on_lod_test_mouse_moved`
+  re-filters the currently visible instances by live distance from
+  the cursor's ground position on every move: an instance with a
+  resolved LOD pair switches between its normal and LOD version
+  depending on whether it's inside or outside the circle (genuine
+  model switching, not just show/hide); a standalone LOD-type
+  instance (draw-distance or name based, no paired counterpart to
+  switch to) only shows when outside. Pushes straight to `_refresh_
+  world_view` rather than the full visibility-filter wrapper, since
+  that would re-apply the global Show Normals/LOD only/Both mode and
+  undo the per-position switching.
+
+  Verified end-to-end: toggle correctly wires/unwires the callback
+  and pulls the radius from settings; a standalone LOD instance far
+  from the test point and a normal instance near it both correctly
+  show together; most directly, an instance with a real LOD pair
+  correctly switches from its normal version to its LOD version as
+  the simulated mouse position moves from inside to outside the
+  circle. Full `QApplication` instantiation clean, `ast.parse` clean
+  on both files.
+
+- **Aug 1, 2026 (cont'd)** — Fixed a real crash Keith hit immediately:
+  "AttributeError: 'DFFViewport' object has no attribute
+  'set_lod_test_callback'." The earlier LOD Test implementation only
+  added the callback/circle/unprojection methods to `MapViewport` -
+  but `preview_widget` (what the toggle actually wires up to) is a
+  `DFFViewport`, a different class entirely with its own camera
+  system (raw OpenGL matrix-stack calls, not `MapViewport`'s explicit
+  numpy matrices).
+
+  Added the same capability to `DFFViewport` directly, reusing its
+  already-existing `_pick_ray` (built for sub-object picking, already
+  replicates `paintGL`'s exact camera transform via `gluUnProject`)
+  rather than building a parallel matrix system from scratch - lower
+  risk than the `MapViewport` implementation, though this also means
+  the ground-plane intersection math couldn't be independently round-
+  trip-verified the way `MapViewport`'s was, since `_pick_ray` needs a
+  real GL context to query matrices via `glGetDoublev`, unavailable in
+  this sandbox. `DFFViewport` works in GTA's native Z-up space
+  directly (unlike `MapViewport`'s Y-up conversion), so the ground
+  plane and circle are drawn in Z/XY terms here instead of Y/XZ.
+
+  Also: per Keith, "click it when nothing is loaded, just to see" -
+  confirmed the toggle is already safe with no world loaded (both
+  `_apply_ipl_visibility_filter` and `_on_lod_test_mouse_moved`
+  early-return cleanly); and "LOD can go on a new row, row 3" - moved
+  the checkbox off the already-crowded first options row into its own
+  new third row, matching the same pattern already used once for
+  Time/Nav.
+
+  Verified: toggling on/off with nothing loaded produces no crash (the
+  exact scenario Keith hit); `preview_widget` (the real `DFFViewport`
+  instance) now confirmed has all three new methods present. Full
+  `QApplication` instantiation clean, `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Found and fixed a real texture-corruption
+  bug, per Keith: "selecting 4 ipl files LAe.ipl, LAn.ipl, LAs.ipl,
+  LAw.ipl, the first LAe.ipl loads and looks ok, the second part loads
+  in (LAn.Ipl), and the textures on the first LAe.ipl get corrupted."
+
+  A direct, unintended consequence of the geometry-conversion caching
+  fix earlier this session: `_refresh_world_view` called `vp._upload_
+  textures(all_textures, additive=False)` unconditionally -
+  `additive=False` calls `clear_textures()` first, wiping *every*
+  previously-uploaded texture (including the first IPL's) before
+  re-uploading only the freshly-collected set for that call. This was
+  harmless before the caching fix (every call used to re-collect and
+  re-upload every visible model's textures regardless of whether
+  they'd already been loaded) - but once an already-converted model
+  (from a prior IPL, now cached) stopped re-collecting its own
+  textures, the wipe-then-partial-reupload left its still-cached,
+  still-referenced display list pointing at texture IDs that had just
+  been deleted - exactly the corruption Keith saw, and exactly the
+  kind of inconsistency that can slip in when two related caches
+  (geometry and textures) aren't kept in sync with each other.
+
+  Fixed by making `additive` mirror `clear_display_lists` exactly
+  (`additive=not clear_display_lists`) - the same "genuine new world
+  load (safe to clear) vs a mere visibility/partial update (must
+  preserve what's already uploaded)" distinction `clear_display_lists`
+  already expresses, now applied consistently to both caches.
+
+  Verified directly with a realistic two-IPL scenario: a genuine first
+  load (default `clear_display_lists=True`) correctly uploads with
+  `additive=False`; a second load bringing in a new IPL alongside the
+  first (`clear_display_lists=False`, matching how `_toggle_ipl_
+  section`'s own already-fixed call actually flows) correctly uploads
+  with `additive=True`, preserving the first IPL's textures rather
+  than wiping them. Full `QApplication` instantiation clean, `ast.
+  parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Solved the "40% of models missing"
+  mystery and shipped everything Keith asked for once he found the
+  actual cause himself: "looking at the ipl's most of them are listed
+  LODs, so where are the normal models? Maybe in the stream.ipl...
+  if the look at the files, almost all the LODs are in the text
+  ipls." Confirmed against his own real files: `LAe.ipl` is 74%
+  LOD-named, with `LAe_stream0.ipl` through `LAe_stream5.ipl` (exactly
+  the 6 files he named) holding the actual normal-detail models. This
+  wasn't a filtering/parsing/caching bug at all - text IPLs and their
+  binary streams simply hold genuinely different content, and nothing
+  was loading the streams automatically.
+
+  **"Load Text plus Binary IPL set"** - new Advanced menu checkbox
+  (default on), new `load_text_plus_binary_ipl_set` setting. When a
+  text IPL loads, its known associated streams (already tracked via
+  the existing filename-prefix matching) now load automatically right
+  alongside it.
+
+  **"Show Full Loading Models (Debug)"** - new Advanced menu checkbox
+  (default off), new `show_verbose_loading_dialog` setting. Added
+  `_VerboseLoadingDialog` - a 500x400 scrolling list dialog matching
+  Keith's exact spec: "Loading {name}.ipl and N binary ipls." header,
+  one line per model as it loads, then "Loading linked ipl file
+  {stream}" headers with their own per-model lines for each stream in
+  turn.
+
+  **Render mode not refreshing the IPL Inst File table** - fixed:
+  `_set_world_render_mode` (the actual handler behind the merged
+  Render/LOD dropdown) now calls `_refresh_ipl_inst_file_panel()` too,
+  matching what an LOD-mode change already did.
+
+  Verified end-to-end: a realistic text-IPL-plus-stream scenario
+  correctly produces 4 total instances (2 from the text IPL, 2 auto-
+  loaded from its stream) where only 2 would have loaded before;
+  `_VerboseLoadingDialog` confirmed 500x400 with the exact line format
+  specified; render mode change confirmed triggering the panel
+  refresh; both new settings confirmed with correct defaults. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added a true single-instance fast path
+  for nudge edits, per Keith: "when moving any object using the IPL
+  object editor, it takes so long for anything to change; is there a
+  way to only update the object thats been moved, not freshing the
+  whole viewport."
+
+  Every nudge (position/rotation/scale) previously went through the
+  full `_apply_ipl_visibility_filter` -> `_refresh_world_view`
+  pipeline - re-running the LOD/TOBJ filters and rebuilding a fresh
+  entry dict (position, rotation, scale, model key) for *every*
+  visible instance in the whole map, just to reflect the one that
+  actually changed. Correct, but wasteful: every other instance's
+  geometry, display list, and transform are completely unaffected by
+  editing one object.
+
+  Added `DFFViewport.update_instance_transform(inst, pos, rot,
+  scale)` - finds the one already-rendered entry matching this
+  instance by identity and updates just its `pos`/`rot`/`scale`
+  fields in place, then triggers a repaint. Confirmed this is
+  actually correct by re-reading `_draw_world_instances`'s own
+  docstring: the compiled display list contains only raw local-space
+  geometry, with position/rotation/scale applied fresh every frame
+  via the surrounding `glPushMatrix`/translate/rotate/scale/
+  `glPopMatrix` - so updating the entry dict's transform fields
+  really does take effect on the next paint, no display-list
+  recompilation needed at all.
+
+  `_on_instance_edited` now tries this fast path first, falling back
+  to the full filter pipeline only if no matching entry is found
+  (e.g. the very first edit of a session, before any full refresh has
+  populated the viewport's instance list yet). Not applied to the
+  `MapViewport`-based world panes - their own rendering is already a
+  different, vectorized numpy point-cloud approach (not per-instance
+  display lists), unlikely to be the actual bottleneck here.
+
+  Verified directly: moving one instance (with two already-rendered
+  entries present) correctly updates only the moved one's position in
+  place, leaves the other completely untouched, and never calls the
+  full pipeline at all; with an empty/unpopulated viewport (no prior
+  refresh), correctly falls back to the full pipeline as expected.
+  Full `QApplication` instantiation clean, `ast.parse` clean on both
+  files.
+
+- **Aug 1, 2026 (cont'd)** — Fixed the "wrapped C/C++ object of type
+  QTableWidgetItem has been deleted" crash Keith hit, and the "massive
+  bottleneck on loading" it was reported alongside.
+
+  Found the real root cause: `_on_ipl_section_cell_clicked` captured
+  `item`/`row` from the IPL Sections table *before* calling `_ensure_
+  ipl_loaded` - but that call (via the newly-added auto-stream-loading
+  feature) calls `_rebuild_ipl_sections_rows()` internally, once per
+  stream file, which replaces every row's items from scratch. The
+  code right after the load then used the original, now-genuinely-
+  stale `item`/`name_item` references without re-fetching them -
+  exactly the crash, and it was this method's own code doing it, not
+  external re-entrancy. Fixed by re-locating the row by `ipl_name`
+  (not the original row index, which can also shift) after the load
+  completes, returning cleanly if the row no longer exists at all.
+
+  Also disabled the whole table for the duration of the load (on top
+  of the fix above, as a second layer of protection) - the existing
+  `_ipl_cell_click_in_progress` flag only ever guarded against re-
+  entering this one method, not against a right-click (a completely
+  different, unguarded handler) firing while a slow load is still
+  rebuilding the table underneath it. A disabled `QTableWidget`
+  receives no mouse events at all, closing that class of race
+  regardless of which handler a click would go through.
+
+  For the reported "massive bottleneck": found `_VerboseLoadingDialog
+  .add_line` called `QApplication.processEvents()` on *every single*
+  model line - for a stream file with thousands of instances, that's
+  thousands of full event-queue pumps, each with real overhead, not
+  just a cosmetic issue. Throttled to roughly 10 updates/second
+  instead, still visibly live but no longer doing that work per line.
+  Also redesigned the dialog per Keith's request ("I might want to
+  keep the loading xxxx.ipl above, and the scrolling below") - the
+  current-file header is now a fixed label above the list, not a
+  scrolling entry that disappears as more models load underneath it.
+
+  Verified: the exact crash scenario (table rebuilt mid-load, exactly
+  matching what the real auto-stream-loading does) reproduced cleanly
+  without an exception, confirming the old item is correctly not
+  reused and the table is properly re-enabled afterward. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two real fixes from Keith's latest
+  report:
+
+  **Item Editor Dialog snapping back to a fixed position** - per
+  Keith: "Every time I click on an object in the viewpoint, the IPL
+  object editor snaps back; it should stay wherever I leave it."
+  Found `dock.move(...)` sat *outside* the "dock is None" first-
+  creation block in `_show_instance_edit_panel`, so it ran on every
+  single call (every object click), unconditionally repositioning the
+  dock near the main window's top-left corner regardless of where the
+  user had since dragged it. Moved inside the first-creation block so
+  it only ever runs once. Verified: moving the dock, then selecting a
+  different object, correctly leaves it exactly where it was moved to.
+
+  **IPL Inst File single-click not centering the viewport** - per
+  Keith: "When I click any line in the IPL inst file, it should take
+  me to the object in the viewpoint." A double-click handler already
+  did this, but only for the Model column specifically, and only on
+  double-click. Added a `cellClicked` connection and a new single-
+  click handler covering any column. Verified: clicking any column
+  (not just Model) on a single click correctly centers the viewport
+  on that row's real instance.
+
+  Also investigated Keith's other two reports - render mode changes
+  (Wireframe/Non-texture/Semi-Solid/Textured) and LOD display mode
+  changes (Show Normal/LOD/Both) not updating the viewport. Reviewed
+  `_set_world_render_mode`/`DFFViewport.set_render_mode` and `_set_
+  lod_display_mode`/`_apply_ipl_visibility_filter` in full - both
+  correctly set their target state and call `self.update()` to
+  request a repaint, both are wired to their menu actions correctly,
+  and confirmed `preview_widget` (not the permanently-empty `_world_
+  panes`) is the only active viewport in this build, so there's no
+  wrong-viewport mismatch either. Didn't find an obvious code-level
+  bug on inspection - logged for further diagnosis with more specific
+  detail from Keith (e.g. whether the button label updates but the 3D
+  view visibly doesn't, versus the change never happening at all,
+  which would point toward a slow-repaint/display-list-recompilation
+  cost for render mode specifically rather than a wiring bug).
+
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Followed up on render mode/LOD mode not
+  updating the viewport, per Keith's answer to a diagnostic question:
+  "Button/menu label changes but 3D view looks identical." That
+  confirms the menu wiring genuinely fires (the label update proves
+  it), narrowing the problem to somewhere between the mode being set
+  and the repaint actually landing.
+
+  Directly verified (via a mocked-GL test, since this sandbox has no
+  real GPU) that the display-list caching/compilation logic itself is
+  correct: switching `self._mode` does produce a different cache key
+  and does trigger a genuinely fresh compile, confirmed by call
+  count - two distinct display lists get compiled for `('model',
+  'textured')` vs `('model', 'wireframe')`, and re-selecting an
+  already-compiled mode correctly reuses the cache rather than
+  recompiling. Also checked every place `self._mode` gets set (only
+  the default and `set_render_mode` itself - no race/override) and
+  `paintGL`'s own start (no early-exit or cached state that could
+  block a mode change from reaching `_draw_world_instances`).
+
+  Couldn't find a code-level bug after this level of verification.
+  Added a defensive fix in both `_set_world_render_mode` and `_set_
+  lod_display_mode`: call `vp.repaint()` (synchronous, paints
+  immediately) right after the mode change, instead of relying solely
+  on `update()` (which only schedules a repaint for the next event
+  loop iteration). Can't confirm this is the actual cause without
+  visual access to Keith's running app, but it's the most plausible
+  remaining explanation once the rendering logic itself is ruled out,
+  and it's a safe, low-risk change regardless of whether it's the
+  real fix.
+
+  Verified: both handlers now correctly call `repaint()` once per
+  mode change. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Three things from Keith's latest report:
+
+  **Status never returning to "Ready"** - per Keith: "Once map
+  workshop has loaded all the models, it should say ready, othereise
+  loading models still shows throughout the session." Nothing
+  previously reset the status bar after the last "Loading model:
+  X..." message from `_refresh_world_view`'s conversion loop -
+  added a final "Ready" status once that method genuinely completes.
+
+  **The real crash** (`glTexImage2D` failing, `RuntimeError` in
+  Keith's traceback via the LOD Test mouse-move callback) - found a
+  genuine, severe GPU memory leak in `_upload_textures`: it
+  unconditionally created a brand new GL texture object on *every*
+  call, even for a texture name already uploaded, silently orphaning
+  the old GL texture ID's VRAM (`self._tex_ids[name] = gl_id` just
+  overwrote the dict entry, never calling `glDeleteTextures` on what
+  it replaced). Harmless for a single load, catastrophic under LOD
+  Test mode specifically - `_refresh_world_view` reruns on *every*
+  mouse move while that's active, re-uploading the same already-
+  loaded textures repeatedly and leaking a fresh copy of each one's
+  VRAM every time, until the driver eventually failed to allocate
+  more - exactly Keith's crash. Fixed by skipping re-upload entirely
+  for a name already in `self._tex_ids` (a texture's pixel data for a
+  given name doesn't change between calls, so there's nothing to gain
+  from re-uploading it). Verified directly: 50 repeated upload calls
+  for the same texture (simulating LOD Test's mouse-move-triggered
+  reruns) now correctly produce exactly 1 GL texture, not 51.
+
+  **Texture downscale option** - per Keith: "im thinking about a
+  texture reduction option, keep 64. 128, 256 untouched but render
+  down to 256x256 anything over 512x512." Added "Reduce Large
+  Textures (256x256)" to the Advanced menu (off by default), with
+  configurable threshold/target settings (defaults matching Keith's
+  own numbers). Implemented `DFFViewport._downscale_rgba` - numpy
+  block-averaging for the clean-multiple case (every size Keith
+  actually mentioned divides evenly: 512/256=2, 1024/256=4,
+  2048/256=8), giving meaningfully better quality than nearest-
+  neighbor since each output pixel blends its whole source block
+  rather than discarding samples; falls back to simple nearest-
+  neighbor index sampling for any size that doesn't divide evenly.
+  Applied right before `glTexImage2D` in `_upload_textures`, so it
+  covers every texture upload regardless of caller.
+
+  Verified extensively: the block-average math directly checked
+  against a hand-built 4-color test image (each output pixel
+  correctly matches its source block's color exactly); the full
+  threshold logic checked against Keith's exact six-size spec
+  (64/128/256/512 sent through untouched, 1024/2048 both correctly
+  reduced to 256x256). Full `QApplication` instantiation clean,
+  `ast.parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Added keyboard rotation shortcuts, per
+  Keith: "im thinking about adding keyboard shortcuts, arrow keys,
+  and numpad to rotate." Arrow keys and numpad both rotate the
+  camera (numpad detected via `KeypadModifier` specifically, so it
+  doesn't collide with top-row number keys used for anything else -
+  a plain "6" and a numpad "6" are otherwise the same key code in
+  Qt). Continuous rotation while a key is held via a repeating
+  ~60fps `QTimer` (stops itself automatically once no rotate key is
+  still held, rather than idling permanently), matching the smooth
+  feel of right-click-drag rotation rather than one fixed step per
+  press.
+
+  Also investigated the reported mouse button reliability issue
+  ("right click held down rotates just fine, middle mouse doesn't
+  always work, left click to select object doesn't always work") -
+  reviewed the full mouse event chain: object selection turns out to
+  be double-click-only (`_pick_world_instance`, a precise ray/
+  triangle test), and pan/rotate share an `elif` chain with `_view_
+  locked` checked only on the rotate branch. Neither directly
+  explains the specific "middle sometimes, right always" asymmetry
+  Keith described, and couldn't rule out an OS/window-manager-level
+  cause (e.g. middle-click-paste, a common X11 convention) without
+  being able to reproduce interactively. Logged to TODO.md with what
+  was and wasn't found, plus a diagnostic suggestion (checking
+  whether the same flakiness shows up in a different app's own
+  middle-click handling). The new keyboard shortcuts give a reliable
+  alternative for rotation specifically regardless of the mouse
+  issue's actual cause.
+
+  Logged game controller/thumbstick support to TODO.md as a real,
+  separate feature - Qt has no built-in gamepad API, would need
+  QtGamepad or a third-party library (availability unchecked), and a
+  polling loop reusing the same QTimer pattern the keyboard shortcuts
+  just established. Not started, scoped for later prioritization.
+
+  Verified: holding and releasing a rotate key correctly tracks/
+  untracks it and starts/stops the timer; continuous rotation while
+  held confirmed changing yaw across simulated ticks; numpad vs
+  top-row key distinction confirmed correct in both directions (a
+  plain "6" is not treated as a rotate key, a numpad "6" is). Full
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Two fixes from Keith's latest request:
+
+  **Settings dialog reorganization** - per Keith: "these settings, can
+  be added to map_workshop's settings on the title bar (topbar) as a
+  new tab in the settings dialog, this would tidy up the IPL
+  controls." Added a new "Loading" tab to the existing `MapSettings
+  Dialog` (opened from the top menu bar), moving "Load Text plus
+  Binary IPL set", "Show Full Loading Models (Debug)", and the
+  texture downscale option out of IPL Controls' Advanced menu.
+  Also made the texture downscale target genuinely configurable
+  rather than fixed at 256 with only on/off exposed ("texture size
+  limit, 256x256 but it's like to be able to change the limit") -
+  both the threshold and target size are now spinboxes. Removed the
+  three now-dead toggle handlers left behind in the old Advanced-menu
+  location.
+
+  While testing this, found the *entire* Settings dialog was already
+  broken and had been crashing on open (`_load_tool_icon` called but
+  never defined anywhere, in the leftover paint-tool "Gadgets" tab)
+  and on save (14 more widget attributes referenced in `_accept()`
+  but never actually created in `__init__` - marching ants, pixel
+  grid, palette rows/cols, platform mode, all leftover from the same
+  paint-tool legacy, not relevant to a 3D map editor). This meant
+  *no* setting in *any* tab could ever actually be saved via this
+  dialog before now, regardless of the new Loading tab. Fixed both
+  with defensive `getattr`/try-except guards rather than
+  reconstructing 15 unrelated paint-tool widgets - every genuinely-
+  used setting across every tab now saves correctly.
+
+  **LOD Test made bidirectional** - per Keith: "LOD test option
+  should work 2 ways, if normal models are loaded, those in the
+  circle get switch to LOD, where if Show LOD is set, then in the
+  circle show normal models." The circle previously always meant
+  "inside = normal, outside = LOD" regardless of the current global
+  Show Normals/LOD only mode. Now the circle always shows the
+  *opposite* detail level from whatever the global mode is already
+  displaying everywhere else - a live "what would the other detail
+  level look like here" preview from either starting mode. `both`
+  mode has no meaningful opposite (both are already shown everywhere)
+  so the circle is a no-op there. Also fixed a real bug caught while
+  rewriting this: a standalone instance with no LOD pair and no
+  draw-distance-based LOD status has nothing to switch to and should
+  always stay visible regardless of the circle - my first draft of
+  the bidirectional logic incorrectly hid it on one side.
+
+  Logged "this function in the future can be explanded" to TODO.md
+  as an open door for later, with a few possible directions noted.
+
+  Verified extensively: full Settings dialog open + Loading tab
+  present + save + live re-application to `preview_widget` confirmed
+  working end-to-end (was completely broken before this); LOD Test
+  bidirectional behavior confirmed correct in both starting modes
+  against a real paired normal/LOD instance, `both` mode confirmed
+  showing everything regardless of circle position, and the
+  standalone-instance edge case confirmed staying visible everywhere.
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Per Keith: "generic.txd loading can be
+  added to settings also under map assits tab." Added a new "Map
+  Assets" tab to the Settings dialog with a "Load Generic.txd
+  Manually" button (a one-time action rather than a persistent
+  toggle, so a button matching the existing "Ribbon Manager…" pattern
+  in the Ribbons tab, not a checkbox). Removed it from IPL Controls'
+  Advanced menu, and since that was the last item left in that menu
+  (the other three moved to Settings > Loading earlier), removed the
+  now-empty Advanced button entirely rather than leave a non-
+  functional leftover - completing the "tidy up the IPL controls"
+  goal from earlier in the session.
+
+  Verified: Map Assets tab present in the dialog; its button
+  correctly triggers the real `_on_load_generic_txd_clicked` handler
+  on click. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Fixed a real mistake from earlier this
+  session: per Keith, "class MapSettingsDialog(QDialog): is where the
+  new settings should be, I don't see Map Assits tab with the Advance
+  settings moved too?" Investigated and found `MapSettingsDialog` is
+  never actually instantiated anywhere in the file - there are
+  *three* separate, parallel settings-dialog implementations
+  (`MapSettingsDialog`, `_show_settings_dialog` reachable only via a
+  hotkey, and `_show_workshop_settings` wired to the actual top-bar
+  Settings button), and the Loading/Map Assets tabs had gone into the
+  first, unreachable one. Full details logged to TODO.md, including
+  a recommendation to eventually consolidate down to one.
+
+  Moved both tabs to `_show_workshop_settings` (the real, reachable
+  one), using the correct `MapSettings` persistence for their own
+  values even though the rest of that dialog uses its own separate,
+  ad-hoc attribute mechanism.
+
+  While testing this, found `_show_workshop_settings`'s own "Apply
+  Settings" button was *also* already broken, independent of any of
+  this - `self.format_combo` and `self.preview_widget.bg_color` are
+  both referenced but never actually exist, meaning the button
+  crashed outright for every tab, not just the new ones, before this
+  fix. Guarded both specifically and wrapped the remaining pre-
+  existing logic in a broad try/except as a pragmatic fix given the
+  apparent scale of pre-existing breakage in this function - a strict
+  improvement either way, since nothing after the first broken
+  reference ever applied before this regardless.
+
+  Verified end-to-end through the real, reachable dialog: Loading and
+  Map Assets tabs present; Apply Settings now completes without
+  crashing; downscale settings and their live re-application to
+  `preview_widget` all confirmed correct; the Generic.txd button
+  confirmed triggering the real handler. Full `QApplication`
+  instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Implemented `path` section parsing for
+  GTA3/VC, per Keith: "we need to address... path for GTAIII and
+  extended for VC. the path coords arent the same scale as the IPL
+  data, this needs to be worked up." `path` was completely absent
+  from `IPL_SECTIONS` before this - not recognized as a section at
+  all, regardless of scale.
+
+  Added `PathNode` (twelve fields per Project Cerbera's VC path
+  documentation: type, next, x/y/z, median, left, right, flag1-3) and
+  `PathGroup` (up to 12 nodes sharing a header line) dataclasses.
+  Implemented the actual parsing in `IPLParser`: a path group's own
+  header line ("1, -1") has no leading tab, its sub-node lines do -
+  the main parse loop's existing `line = raw.split("#")[0].strip()`
+  already erases that distinction by the time `line` is available, so
+  the new code checks the *raw*, pre-strip text specifically for
+  `path` section lines to tell a new group from a node belonging to
+  the current one.
+
+  Applied the /16 coordinate conversion confirmed last session (VC's
+  text `path` section stores coordinates in units "sixteen times
+  smaller than standard," per Project Cerbera) so a `PathNode`'s x/y/
+  z land in the same coordinate space as everything else (instance
+  positions, etc.), not the file's own differently-scaled internal
+  units.
+
+  Wired `paths` into `GTAWorldLoader` too (both the eager/dat-driven
+  and on-demand/lazy IPL load paths), matching `instances`' own
+  existing accumulation pattern, so parsed path data is actually
+  reachable going forward rather than only living inside a single
+  `IPLParser` instance.
+
+  Verified extensively against Keith's real uploaded `paths.ipl`
+  (1957 path groups, 23,484 total nodes): parse completes with zero
+  errors/warnings; the first node's converted coordinates match the
+  expected /16 calculation exactly `(-866.63125, -652.45,
+  10.0676875)`; the parsed group count (1957) exactly matches the
+  raw file's own group-header line count via independent line-by-line
+  verification; the empty `inst`/`cull`/`pick` sections earlier in
+  the same file correctly produce zero instances rather than
+  interfering; the very last group and node parse correctly too, not
+  just the first. Confirmed accumulating correctly through
+  `GTAWorldLoader._load_ipl` as well, not just the standalone parser.
+
+  Not yet done - see TODO.md: showing path data anywhere in the UI,
+  editing, write-back, and the rest of Keith's broader request (pick
+  support, cull zones as editable boxes, IDE tobj/path/2dfx editor
+  for Model Workshop) are all separate, unstarted pieces.
+
+  Along the way, caught and fixed a mistake in my own edit process -
+  a `str_replace` call accidentally deleted `IPLLoadResult`'s class
+  declaration and part of its docstring; caught immediately via the
+  syntax check that always runs after every edit, fixed before
+  moving on.
+
+- **Aug 1, 2026 (cont'd)** — Verified "apply settings for show full
+  loading, and texture scaling" end-to-end: changed both settings in
+  the Loading tab, clicked Apply Settings, confirmed both save to
+  MapSettings, the texture downscale change live-applies to `preview_
+  widget`, and both correctly persist and show as checked when the
+  dialog is re-opened. Confirmed working correctly.
+
+  Added a dedicated LOD Test circle radius setting, per Keith: "we
+  also need a settings for the LOD test circle, its set as 300, would
+  be nice to have a settings in Map-Assists to adject the circle
+  size." The circle's radius was previously tied directly to `lod_
+  draw_dist_threshold` (the LOD detection cutoff), so adjusting one
+  meant adjusting both together. Added `lod_test_circle_radius` as
+  its own separate setting (same 300.0 default, so no behavior change
+  until actually adjusted) and a spinbox in Settings > Map Assets, per
+  Keith's exact requested placement, with a live update to any
+  already-active LOD Test session too, not just future ones.
+
+  Verified: default value matches prior behavior exactly (300);
+  changing and applying the setting saves correctly; toggling LOD
+  Test mode on after the change correctly picks up the new radius.
+  Full `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Moved the LOD Test toggle from an IPL
+  Controls checkbox to a ribbon icon, per Keith: "the LOD test
+  function could be an SVG icon on the ribbon, 2 overlapping Circles,
+  one hollow, other solid. with the tooltip. this way it does have to
+  use up space on the ipl control, but keep row3 for future
+  functions, like show tojb, show Paths, show zons."
+
+  Added `SVGIconFactory.lod_test_icon` - two overlapping circles, one
+  hollow (normal-detail models) and one solid (LOD models), matching
+  Keith's exact spec and suggesting the live switching the tool
+  actually performs. Added as a checkable action in the Render ribbon
+  group (alongside the other render/viewport-mode toggles it
+  conceptually belongs with - Toggle Mesh, Toggle Backface, Cycle
+  Render Style, Toggle Shading), wired to the same `_on_lod_test_
+  toggled` handler already built earlier this session, with a fuller
+  descriptive tooltip than the terse action name alone.
+
+  Removed the old checkbox from IPL Controls row 3 - left the row's
+  layout intact and empty rather than removing it, reserved for the
+  visibility toggles Keith mentioned (TOBJ/paths/zones), logged to
+  TODO.md.
+
+  Verified: new icon renders without error; ribbon action correctly
+  checkable with the full descriptive tooltip; toggling it on wires
+  the same mouse-move callback the old checkbox did, toggling it off
+  clears the callback and re-applies the visibility filter
+  identically; confirmed no remaining references to the removed
+  checkbox anywhere. Full `QApplication` instantiation clean, `ast.
+  parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Fixed the crash Keith hit immediately
+  after toggling Shading: "TypeError: ModelWorkshop._toggle_viewport_
+  shading() missing 1 required positional argument: 'enabled'." The
+  ribbon action's callback lambda discarded the checkbox state
+  entirely (`lambda v: self._toggle_viewport_shading()`) instead of
+  passing it through - fixed to `lambda v: self._toggle_viewport_
+  shading(v)`.
+
+  While fixing this, found `_toggle_viewport_shading` (and three
+  other call sites - the Light Setup Dialog's live-apply sync, its
+  preset-load restore, and its own internal checkbox sync) all read
+  `self._shading_btn`, an attribute that's never actually created -
+  the real one is `self._shading_act` (the `QAction` created via `_act
+  (..., attr='_shading_act')` in `_build_toolbars`). Every one of
+  these 4 call sites was silently no-opping (icon never updated,
+  checked-state never synced) rather than crashing, since `getattr(...,
+  default=None)` swallowed the mismatch quietly. Renamed all 4 to the
+  correct attribute - `QAction` supports the same `.isChecked()`/
+  `.setChecked()`/`.setIcon()`/`.blockSignals()` interface these sites
+  already expected, so no other logic needed to change.
+
+  Per Keith's context for keeping this feature - "this can be used to
+  generate pre-lighting, that can be saved back to the models" -
+  logged the pre-lighting bake/write-back idea to TODO.md as a real,
+  substantial future direction, not attempted this turn.
+
+  Verified: toggling the Shading ribbon action on/off no longer
+  crashes; `preview_widget._shading_enabled` correctly reflects the
+  new state; confirmed the icon-update path inside `_toggle_viewport_
+  shading` now actually finds and uses the real action instead of
+  silently no-opping. Full `QApplication` instantiation clean, `ast.
+  parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Disabled the 4-Pane View toggle, per
+  Keith: "4 panels icon, keep, but the function isnt needed, it
+  creates a strange beheavour." Icon stays visible in the Navigation
+  ribbon group exactly as requested; the action itself is now
+  disabled (greyed out, unclickable) with a tooltip explaining why.
+
+  Root cause of the "strange behaviour": `_sync_quad_from_main` (the
+  function that populates the 4 panes when switching to quad view)
+  only ever mirrors single-model geometry attributes (`_vertices`,
+  `_triangles`, etc.) - inherited directly from Model Workshop's
+  single-DFF-editing base this file was built on. It never syncs
+  `_world_instances`, the actual multi-instance map data Map
+  Workshop's real workflow uses, so switching to 4-Pane View while
+  an actual map is loaded (which is nearly always, for this app)
+  showed blank panes rather than anything useful.
+
+  Logged to TODO.md that a genuine world-aware version of this
+  feature would need its own sync logic built from scratch around
+  `_world_instances`, not a fix to the existing single-model one, in
+  case a real "4 world views from different angles" feature is wanted
+  later.
+
+  Verified: the action still exists and is visible in the toolbar
+  (icon kept), confirmed disabled/unclickable, tooltip confirmed
+  explaining the reason. Full `QApplication` instantiation clean,
+  `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Converted IPL Controls' INST/CULL/ZON/
+  PATH buttons into a real tab bar, and added `grge`/`enex` parsing,
+  per Keith: "in IPL Controls we have the labels, made into tabs...
+  but when loading SA maps, there would be more tabs" plus real
+  example `grge`/`enex` data.
+
+  Added `GrgeEntry` (11 fields: X1/Y1/Z1, front X/Y, X2/Y2/Z2, door
+  type, garage type, name) and `EnexEntry` (18 fields: enter X/Y/Z/
+  angle, size X/Y/Z, exit X/Y/Z/angle, target interior, flags, name,
+  sky, num peds, time on/off) dataclasses, cross-verified against
+  established GTA modding documentation (SannyBuilder forums for
+  GRGE, Grand Theft Wiki for ENEX) - both matched Keith's own real
+  example data field-for-field (his `grge` line's garage type 16 =
+  "Save garage," entirely consistent with its name "cjsafe"; all 10
+  of his real `enex` lines parsed with zero errors). Wired into
+  `IPLParser` and `GTAWorldLoader`'s accumulation, matching the
+  `path` pattern from last session.
+
+  Replaced the `QButtonGroup` row with a `QTabBar` covering all 11 SA
+  IPL sections: INST/CULL/ZON/PATH/GRGE/ENEX now enabled (PATH newly
+  enabled too, since last session's work made it real, no longer a
+  stub); PICK/JUMP/TCYC/AUZO/MULT added as disabled stub tabs with
+  explanatory tooltips (AUZO's notes Keith's audio-icon idea
+  specifically) rather than not existing at all - scales to many more
+  sections without the row running out of horizontal space.
+
+  Made the IPL Inst File table's columns dynamic per section instead
+  of permanently fixed at INST's 13-column layout - GRGE shows its
+  own 11 columns, ENEX its own 18, with headers matching each
+  section's real field names.
+
+  Logged two things needing Keith's input/further work to TODO.md:
+  what exactly "tobj/path added to ipl objects" means for the IDE
+  side (a few plausible interpretations, didn't want to guess wrong),
+  and that PICK/JUMP/TCYC/AUZO/MULT still need real parsing once
+  sample data exists to verify against.
+
+  Verified extensively: `_parse_grge`/`_parse_enex` tested directly
+  against Keith's exact real lines; a full test file with all 10 of
+  his real `enex` lines plus the `grge` line parses with zero errors/
+  warnings; confirmed accumulating correctly through `GTAWorldLoader`;
+  tab bar confirmed showing all 11 tabs with correct enabled/disabled
+  states, clicking an enabled tab correctly changes the display type,
+  clicking a disabled tab correctly no-ops; IPL Inst File table
+  confirmed showing the right dynamic headers and data for both GRGE
+  and ENEX end-to-end. Full `QApplication` instantiation clean, `ast.
+  parse` clean on both files.
+
+- **Aug 1, 2026 (cont'd)** — Properly fixed the `bg_color` error
+  Keith kept seeing when saving settings: "[Settings] Some pre-
+  existing settings could not be applied: 'DFFViewport' object has no
+  attribute 'bg_color'... trying to save, full loading debug or
+  texture size reducing, gives that error." This had been left as a
+  swallowed warning by the earlier defensive try/except - functional
+  underneath, but visibly alarming every single time, exactly what
+  Keith reported.
+
+  Traced the actual root cause: `self.preview_widget.bg_color` never
+  existed anywhere - that plain `bg_color` attribute (no underscore)
+  belongs to a completely different class, `ZoomablePreview` (a 2D
+  `QLabel`-based preview widget from the paint-tool legacy this file
+  inherited), not `DFFViewport` (the real `preview_widget`). No color-
+  picker UI exists anywhere in this dialog to supply a specific solid
+  color, so both the "checkerboard" and "solid"/else branches now
+  correctly reset to the theme-default color via `set_checkerboard_
+  background()` - the right call for this despite its name (`DFFView
+  port` has no real checkerboard rendering at all, per its own
+  docstring). Found and fixed a second, separate instance of the
+  identical bug in `_pick_background_color` (a "Pick Background
+  Color" action, untriggered by Keith's report but would have crashed
+  identically if ever used) - now uses `DFFViewport`'s own `_get_bg_
+  color()` to supply a real `QColor`.
+
+  Verified: reproduced Keith's exact scenario (Apply Settings with
+  both "Show Full Loading" and texture downscale changed) with stdout
+  captured - confirmed zero `bg_color` output where the warning used
+  to appear every time, both settings still save correctly; separately
+  confirmed `_pick_background_color` now runs without crashing. Full
+  `QApplication` instantiation clean, `ast.parse` clean.
+
+- **Aug 1, 2026 (cont'd)** — Added a hidden toolbar section to the
+  Ribbon Manager, per Keith: "in ribbon manager i'd like a hidden
+  section where anything placed there cant be seen." A special
+  "Hidden" toolbar is created automatically the first time the Ribbon
+  Manager opens, behaves like any other toolbar there (appears in the
+  toolbar list, actions can be dragged/moved into and out of it via
+  the existing "Move selected to:" mechanism) except it's never
+  actually shown on screen - `setVisible(False)` enforced both on
+  creation and via a `visibilityChanged` safeguard, so nothing (a
+  stray toggle, `QMainWindow`'s own state save/restore round-trip on
+  the next launch, etc.) can make it - or whatever's parked in it -
+  visible again without deliberately moving those actions back out
+  first.
+
+  Verified: toolbar creates correctly and starts invisible; calling
+  the getter again returns the same instance rather than creating
+  duplicates; directly forcing it visible confirmed the safeguard
+  immediately re-hides it; confirmed it shows up correctly in the
+  Ribbon Manager's own toolbar list so actions can actually be moved
+  into it. Full `QApplication` instantiation clean, `ast.parse`
+  clean.
+
+- **Aug 1, 2026 (cont'd)** — Added "Show Tobj" and moved Nav to
+  Settings, per Keith's follow-up: "have an option to toggle showing
+  tobj [Show Tobj], in row 3, timed objects will be shown, depending
+  on there time values. tojb can be shown along side the inst,
+  towards the botton, keeping the placement order of the ipl. if we
+  move Nav functions to Settings, then row 2 could be used."
+
+  Moved the "Nav" popup (mouse sensitivity, go-to-object zoom
+  distance) into a new Navigation tab in the real Settings dialog -
+  same widgets, same live-apply behavior as the original popup,
+  nothing new persisted that wasn't before. Removed the now-dead
+  `_show_nav_settings_popup` method and its IPL Controls button
+  entirely.
+
+  Added "Show Tobj" in the row 2 space this freed up. Unchecked
+  (default): TOBJ-type instances are excluded from the INST table
+  view entirely. Checked: they're collected separately and appended
+  after all the regular rows, filtered to only the ones currently
+  active for the simulated hour (reusing the exact same time_on/
+  time_off logic already driving the 3D world view's Time switch,
+  including the overnight-wrap case). Regular (non-TOBJ) rows are
+  completely unaffected either way - unchanged relative order, taken
+  directly from the file's own line order, exactly as before this
+  feature existed.
+
+  Verified end-to-end with a real TOBJ model (time_on=20, time_off=6,
+  an overnight-wrap case) mixed in with two ordinary instances: Show
+  Tobj off correctly excludes it entirely; on with the simulated hour
+  inside its active window correctly shows it appended at the bottom,
+  after both regular rows in their original order; on with the hour
+  outside its window correctly excludes it again. Navigation tab
+  confirmed present with both controls working and live-applying to
+  `preview_widget`. Full `QApplication` instantiation clean, `ast.
+  parse` clean.
+
+- **Aug 14, 2026** — Added collision render options to IPL Controls,
+  per Keith: "add to collisions to the IPL control pane, under render
+  options, load solid collision, load semi-solid, wireframe cols, and
+  solid with surface mapping" -> "Ghost is a good idea; Show Ghosted
+  Col, Show Surface Mapped Col, Show Semi-Solid Col, Show Wireframe
+  Col". Four independent checkboxes in the row 3 space reserved for
+  this back on Aug 1 - not an exclusive group like Render/LOD, any
+  combination can be on together. Each draws collision geometry as an
+  overlay on top of the model, never replacing it.
+
+  `ModelCache` gained a `_col_index` keyed by each COL model's own
+  internal name (`header.name`), not its container filename - real
+  COL archives are multi-model (e.g. generic.col holds many
+  separately-named collision models), so indexing by container name
+  the way `_dff_index`/`_txd_index` already do wouldn't map to
+  instance model names at all. `index_col_files()` loads and indexes
+  every model in a given list of `.col` paths; `_refresh_world_view`
+  now also globs the game root recursively for `*.col` files
+  alongside the existing IMG indexing, same pattern already used for
+  standalone TXD fallback search elsewhere in this file.
+
+  `DFFViewport` gained `show_col_ghosted/semi_solid/wireframe/
+  surface_mapped` flags, their setters, and `_draw_collision_faces` -
+  unlit (COL vertices carry no normals), flat colour for ghosted/
+  semi-solid/wireframe, per-face material colour for surface-mapped.
+  A separate `_col_display_lists` cache (same lazy-build-once-per-
+  model pattern as the model's own display lists) keeps collision
+  overlay drawing cheap regardless of how many instances share a
+  model. Only the mesh (vertices/faces) is drawn - COL's sphere/box
+  primitives aren't rendered yet, logged to TODO.md.
+
+  Material colours are resolved once per face, in `map_workshop.py`
+  (`_convert_collision_geometry`, reusing `col_materials.
+  get_material_colour`, game detected as VC vs SA from the COL
+  header's own version) - not inside `dff_viewport.py`, keeping COL-
+  material lookups out of the pure-GL viewport code entirely.
+
+  `ast.parse` clean on all three changed files (`model_cache.py`,
+  `dff_viewport.py`, `map_workshop.py`). Not yet tested against
+  Keith's real data - depends on his game folder actually having
+  standalone `.col` files under the game root for anything to show.
