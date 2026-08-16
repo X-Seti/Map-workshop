@@ -3201,6 +3201,14 @@ class MapSettings(QObject):
         # viewpoint") - same representation as path_line_color/
         # cull_box_color. Sky blue by default, distinct from both.
         'zone_box_color': (77, 179, 255),
+        # Zone box render style (Aug 16 2026, per Keith: "in zons, the
+        # render dropdown could show, Zon - Ghosted, Zon - Wireframe,
+        # Zon - translucent") - 'ghosted' (filled+outlined, default),
+        # 'wireframe' (edges only), or 'translucent' (filled only, no
+        # outline, more see-through than ghosted). Scoped to zone
+        # boxes only, per Keith's own request - cull/occlusion boxes
+        # aren't affected by this setting.
+        'zone_render_style': 'ghosted',
         # Occlusion zone box colour in the 3D view (Aug 16 2026,
         # continuing the cull/zon viewport work) - same representation
         # as the other overlay colours. Pink by default, distinct from
@@ -11616,6 +11624,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             saved_key_overrides = self.map_settings.get('viewport_key_bindings')
             if saved_key_overrides:
                 self.preview_widget.set_key_bindings(saved_key_overrides)
+        # Restore the saved zone render style (Aug 16 2026, per
+        # Keith's "Zon - Ghosted/Wireframe/Translucent" dropdown) -
+        # same reasoning as the keybindings restore just above.
+        if hasattr(self.preview_widget, 'set_zone_render_style'):
+            self.preview_widget.set_zone_render_style(
+                self.map_settings.get('zone_render_style'))
         self._viewport_stack = QStackedWidget()
         self._viewport_stack.addWidget(self.preview_widget)   # index 0: single view
         inner_mw.setCentralWidget(self._viewport_stack)
@@ -20658,7 +20672,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         icon_color = self._get_icon_color()
         open_btn = QPushButton(get_add_icon(sm_buttonheight, icon_color), "Open")
         open_btn.setToolTip("Load the selected IPL's content on demand -\n"
-                            "same as clicking its eye icon to show it")
+                            "same as clicking its eye icon to show it") # TODO this needs to aupport zon files.
         open_btn.setIconSize(QSize(18, 18))
         open_btn.setFixedHeight(18)
         open_btn.setStyleSheet(_compact_18)
@@ -20715,7 +20729,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # display_to_stem machinery every other IPL already uses, so
         # the existing click/eye-icon/view pipeline works for either
         # file type unmodified.
-        open_file_btn = QPushButton(get_add_icon(sm_buttonheight, icon_color), "Open File...")
+        open_file_btn = QPushButton(get_add_icon(sm_buttonheight, icon_color), "")
+        # TODO this needs to be combined with the first open function, that can support ipl, ide, and zon files.
+
         open_file_btn.setToolTip(
             "Load one or more standalone .ipl or .zon files (info.zon,\n"
             "map.zon, navig.zon, cull.ipl, etc.) - they'll appear in\n"
@@ -20724,14 +20740,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         open_file_btn.setFixedHeight(18)
         open_file_btn.setStyleSheet(_compact_18)
         open_file_btn.clicked.connect(self._on_ipl_tab_open_file_clicked)
-        for b in (open_btn, close_btn, new_btn, delete_btn, open_file_btn):
+        for b in (open_file_btn, close_btn, new_btn, delete_btn):
             title_row.addWidget(b)
         title_row.addStretch()
         lay.addWidget(title_row_widget)
         self._register_collapsible_button_row(
-            title_row_widget, [(open_btn, "Open"), (close_btn, "Close"),
-                                (new_btn, "New"), (delete_btn, "Delete"),
-                                (open_file_btn, "Open File...")])
+            title_row_widget, [(open_file_btn, "Open"), (close_btn, "Close"),
+                                (new_btn, "New"), (delete_btn, "Delete")])
         if not hasattr(self, '_object_browser_tab_rows'):
             self._object_browser_tab_rows = {}
         self._object_browser_tab_rows['ipl'] = title_row_widget
@@ -21857,6 +21872,32 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             action.triggered.connect(
                 lambda checked, s=setter_name: self._on_col_render_option_toggled(s, checked))
 
+        render_lod_menu.addSeparator()
+
+        # Zone render style (Aug 16 2026, per Keith: "in zons, the
+        # render dropdown could show, Zon - Ghosted, Zon - Wireframe,
+        # Zon - translucent") - exclusive, like render_group/lod_group
+        # above (pick one style), not independently toggleable like
+        # the Col options (a zone box only ever renders one way at a
+        # time). Scoped to zone boxes specifically, per Keith's own
+        # "in zons" framing - cull/occlusion boxes keep their fixed
+        # ghosted look from the previous request, not touched here.
+        zon_render_group = QActionGroup(render_lod_menu)
+        zon_render_group.setExclusive(True)
+        zon_render_specs = [
+            ('ghosted',     "Zon - Ghosted",     "Filled, semi-transparent boxes with a defined outline (default)"),
+            ('wireframe',   "Zon - Wireframe",   "Edges only, no fill"),
+            ('translucent', "Zon - Translucent", "Filled, more see-through boxes with no outline"),
+        ]
+        for mode, label_text, tooltip in zon_render_specs:
+            action = render_lod_menu.addAction(label_text)
+            action.setCheckable(True)
+            action.setChecked(mode == self.map_settings.get('zone_render_style'))
+            action.setToolTip(tooltip)
+            action.triggered.connect(
+                lambda checked, m=mode: self._set_zone_render_style(m) if checked else None)
+            zon_render_group.addAction(action)
+
         render_lod_btn.setMenu(render_lod_menu)
         render_lod_btn.setToolTip("Choose how the world view renders geometry, and which detail level(s) to show")
         opts_row.addWidget(render_lod_btn)
@@ -21917,7 +21958,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # filter logic already driving the 3D world view's Time
         # switch) - the regular rows above them keep their original
         # IPL file line order unchanged either way.
-        show_tobj_chk = QCheckBox("Show Tobj")
+        show_tobj_chk = QCheckBox("Tobj")
         show_tobj_chk.setFixedHeight(18)
         show_tobj_chk.setStyleSheet(_compact_18)
         show_tobj_chk.setToolTip(
@@ -21952,7 +21993,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # _create_settings_dialog's path-colour picker). Off by
         # default, matching every other optional overlay. Show Zones
         # can still follow later on this same row.
-        show_paths_chk = QCheckBox("Show Paths")
+        show_paths_chk = QCheckBox("Paths")
         show_paths_chk.setFixedHeight(18)
         show_paths_chk.setStyleSheet(_compact_18)
         show_paths_chk.setToolTip(
@@ -21973,7 +22014,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # unaffected/untouched - this is a separate, new
         # implementation for the actual primary viewport, which never
         # had any cull-box rendering of its own before.
-        show_cull_chk = QCheckBox("Show Cull Zones")
+        show_cull_chk = QCheckBox("Cull")
         show_cull_chk.setFixedHeight(18)
         show_cull_chk.setStyleSheet(_compact_18)
         show_cull_chk.setToolTip(
@@ -21987,7 +22028,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # .zon/IPL zone entry as a wireframe box (DFFViewport._draw_
         # zone_boxes), same pattern as Show Cull Zones right above -
         # zones never had any viewport rendering at all before this.
-        show_zone_chk = QCheckBox("Show Zones")
+        show_zone_chk = QCheckBox("Zon")
         show_zone_chk.setFixedHeight(18)
         show_zone_chk.setStyleSheet(_compact_18)
         show_zone_chk.setToolTip(
@@ -22001,7 +22042,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # rotated wireframe box (DFFViewport._draw_occl_boxes) -
         # "occl" was never even a recognised VC section keyword
         # before this fix, let alone rendered.
-        show_occl_chk = QCheckBox("Show Occlusion")
+        show_occl_chk = QCheckBox("Occlusion")
         show_occl_chk.setFixedHeight(18)
         show_occl_chk.setStyleSheet(_compact_18)
         show_occl_chk.setToolTip(
@@ -22024,6 +22065,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # method - see show_panel_width_settings's own docstring in
         # imgfactory.py), fixed alongside this so the cog opens the
         # right dialog rather than a small unrelated one.
+        # I've shorterned Paths, Cull, Zon and Occlusion'
+        # TODO; Cull does not show in the IPL file display
+
         from PyQt6.QtWidgets import QToolButton
         ipl_settings_btn = QToolButton()
         try:
@@ -22038,6 +22082,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         ipl_settings_btn.setVisible(self.is_docked and not self.standalone_mode)
         self._ipl_controls_settings_btn = ipl_settings_btn
 
+
         opts_row3 = QHBoxLayout()
         opts_row3.addWidget(show_paths_chk)
         opts_row3.addWidget(show_cull_chk)
@@ -22045,6 +22090,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         opts_row3.addWidget(show_occl_chk)
         opts_row3.addStretch()
         opts_row3.addWidget(ipl_settings_btn)
+        # TODO This needs to be moved to the [IMG] [DAT] [IDE] [IPL] <other buttons> [*] on the far right of the Object Browser.
+
         lay.addLayout(opts_row3)
 
         dock = QDockWidget("IPL Controls", self)
@@ -24761,6 +24808,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             vp.set_show_zone_boxes(checked)
         if checked:
             self._refresh_zone_box_visualization()
+
+    def _set_zone_render_style(self, mode): #vers 1
+        """Zon render style changed via the Render dropdown (Aug 16
+        2026, per Keith: "in zons, the render dropdown could show,
+        Zon - Ghosted, Zon - Wireframe, Zon - translucent") -
+        persisted immediately (debounced auto-save, same as every
+        other MapSettings.set() call) and pushed to the live viewport
+        right away, no separate Apply step needed since this is a
+        dropdown choice, not a form field."""
+        self.map_settings.set('zone_render_style', mode)
+        vp = getattr(self, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'set_zone_render_style'):
+            vp.set_zone_render_style(mode)
 
     def _refresh_occl_box_visualization(self): #vers 1
         """Push the currently visible IPLs' occlusion zones to the
