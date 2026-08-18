@@ -12259,11 +12259,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # - Ribbon 3: Edit Geometry
         tb_geo = _tb("Edit Geometry")
-        _act(tb_geo, "Create Primitive",
-             _icon(lambda color=icon_color: MaxSVGIcons.create_primitive_icon(
-                 size=20, color=color), 'create_primitive_icon'),
-             callback=self._create_primitive_dialog, attr='_prim_act')
-        tb_geo.addSeparator()
         _act(tb_geo, "Mirror",
              _icon(lambda color=icon_color: MaxSVGIcons.mirror_icon(
                  size=20, color=color), 'mirror_icon'),
@@ -12367,7 +12362,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._sel_vert_act, self._sel_edge_act,
             self._sel_face_act, self._sel_poly_act,
             self._backface_cull_act, self._front_paint_act,
-            self._prim_act, self._extrude_act,
             self._shading_act, self._light_setup_act,
         ]
         # Legacy compat for code that checks _dff_only_toolbar_btns
@@ -20954,6 +20948,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QApplication.processEvents()
         self._refresh_img_tab(loader)
         self._refresh_ipl_inst_file_panel()
+        # Hide the Occlusion overlay button entirely for GTA III worlds
+        # (Aug 19 2026, per Keith: "because we're working with, gta3,
+        # we don[']t need to see the [o]cclusions button" - occlusion
+        # zones (the "occl" IPL section) are VC/SA-only by format,
+        # confirmed earlier this session against real game data - a
+        # GTA III world can never have any occlusion data to show at
+        # all, so the button is pure clutter there, not just unused.
+        if hasattr(self, '_show_occl_chk'):
+            self._show_occl_chk.setVisible(game != 'gta3')
         self._set_status(
             f"Loaded {game.upper()} world: {len(loader.objects)} objects, "
             f"{len(loader.instances)} instances, {loader.stats.ipl_files} IPL files")
