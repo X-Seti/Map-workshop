@@ -11,3 +11,6 @@ __pycache__/
 # window layout).
 apps/components/Map_Editor/config/
 
+apps/images
+apps/utils
+apps/themes
