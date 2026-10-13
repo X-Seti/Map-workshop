@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-#this belongs in apps/components/Map_Editor/map_workshop.py - Version: 193
+#this belongs in apps/components/Map_Editor/map_workshop.py - Version: 249
 # X-Seti - see CHANGELOG.md in this folder for the full dated history
 
 import os
 import math
 import json
 # Force X11/GLX backend for NVIDIA on Wayland
-os.environ['QT_QPA_PLATFORM'] = 'xcb'
-os.environ['QSG_RHI_BACKEND'] = 'opengl'
-os.environ['LIBGL_ALWAYS_SOFTWARE'] = '0'  # Use hardware acceleration
-
-import tempfile
-import subprocess
-import shutil
-import struct
 import sys
-import io
+if sys.platform.startswith('linux'):   # xcb only exists on Linux
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+    os.environ['QSG_RHI_BACKEND'] = 'opengl'
+    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '0'  # Use hardware acceleration
+
+import shutil
+import sys
 import base64
-import numpy as np
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
 
 
 # Add project root to path for standalone mode
@@ -29,48 +25,33 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # Import PyQt6
-from PyQt6.QtWidgets import (QApplication, QSlider, QCheckBox,
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QDialog, QFormLayout, QSpinBox,  QListWidgetItem, QLabel, QPushButton, QFrame, QFileDialog, QLineEdit, QTextEdit, QMessageBox, QScrollArea, QGroupBox, QTableWidget, QTableWidgetItem, QColorDialog, QHeaderView, QAbstractItemView, QMenu, QComboBox, QInputDialog, QTabWidget, QDoubleSpinBox, QRadioButton, QStyledItemDelegate, QTimeEdit,
-    QDockWidget, QFontComboBox, QSizePolicy, QMenuBar, QStatusBar, QProgressDialog, QStackedWidget, QGridLayout, QToolButton, QProgressBar
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QWidget,
+    QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QDialog, QSpinBox, QListWidgetItem, QLabel,  QPushButton, QFrame, QFileDialog, QLineEdit, QMessageBox, QScrollArea, QGroupBox, QTableWidget, QTableWidgetItem, QColorDialog, QHeaderView, QAbstractItemView, QMenu, QComboBox, QInputDialog, QTabWidget, QDoubleSpinBox, QRadioButton, QStyledItemDelegate, QTimeEdit, QDockWidget, QSizePolicy, QStatusBar,
+    QProgressDialog, QStackedWidget, QGridLayout, QToolButton, QProgressBar
 )
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QRect, QByteArray, QPointF, QTimer, QAbstractTableModel, QObject
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QByteArray, QPointF, QTimer, QAbstractTableModel, QObject, QEventLoop
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QImage, QPainter, QPen, QBrush, QColor, QCursor
 
 # Shared DFFViewport — import from methods/, fallback to local methods/
+from apps.methods.ribbon_dialog import RibbonIconsMixin
 from apps.methods.dff_viewport import DFFViewport
 
 try:
     from PyQt6.QtGui import QAction
 except ImportError:
     from PyQt6.QtWidgets import QAction
-from PyQt6.QtSvg import QSvgRenderer
 
 # Import project modules AFTER path setup
 from apps.methods.imgfactory_svg_icons import SVGIconFactory
 
-# Parser imports — fall back to local depends/ when running standalone
-try:
-    from apps.methods.dff_parser import load_dff, detect_dff, DFFParser
-    from apps.methods.txd_parser import parse_txd as _parse_txd_shared
-except ImportError:
-    from apps.components.Model_Editor.depends.dff_parser import load_dff, detect_dff, DFFParser
-    try:
-        from apps.components.Model_Editor.depends.txd_parser import parse_txd as _parse_txd_shared
-    except ImportError:
-        _parse_txd_shared = None
+from apps.methods.txd_parser import parse_txd as _parse_txd_shared
 
 
 # COL Workshop parser system
-from apps.components.Model_Editor.depends.col_workshop_classes import (
-    COLModel, COLVersion, COLHeader, COLBounds,
-    COLSphere, COLBox, COLVertex, COLFace
-)
 
-from apps.components.Model_Editor.depends.col_workshop_structures import setup_col_table_structure, populate_col_table
-from apps.components.Model_Editor.depends.col_workshop_parser import COLParser
-from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
 from apps.gui.tool_menu_mixin import ToolMenuMixin
+from apps.methods.img_factory_settings import get_user_config_dir
 try:
     from apps.methods.gl_viewport_mixin import GLViewportMixin
 except ImportError:
@@ -84,484 +65,24 @@ DEBUG_STANDALONE = False
 
 # Import AppSettings
 try:
-    from apps.utils.app_settings_system import AppSettings, SettingsDialog
     APPSETTINGS_AVAILABLE = True
 except ImportError:
     APPSETTINGS_AVAILABLE = False
     print("Warning: AppSettings not available")
 
 ##Methods list -
-# apply_changes
-# create_new_model
-# delete_model
-# export_model    STUB: write DFF to file
-# import_elements    STUB: import OBJ/FBX geometry into DFF
-# open_col_editor
-# open_col_workshop
-# open_model_workshop    factory method — open workshop with optional DFF #vers 3
-# open_workshop
-# refresh_model_list
-# update_view_options
 #
 ##class _DFFGeometryAdapter: -
 # __init__
 # __repr__
-# _world_matrix
 # face_count
 # materials
 # vertex_count
-#
-##class COL3DViewport: -
-# __init__
-# _apply_selection_click    shared click/ctrl-toggle/shift-add for vertex/edge/face select #vers 1
-# _apply_to_all_faces
-# _apply_to_selected_faces
-# _build_face_adjacency    face_index -> shared-edge neighbours map, built fresh each call #vers 1
-# _cycle_render_style
-# _extrude_selected_faces    duplicate+offset selected face verts, build side walls #vers 1
-# _face_material_id    normalise face.material to plain int id #vers 1
-# _find_workshop
-# _get_scale_origin
-# _get_ui_color
-# _gizmo_arm
-# _gizmo_centre
-# _hit_gizmo
-# _pick_edge    closest edge to click point, screen-projected #vers 1
-# _pick_face    closest face centroid to click point, screen-projected #vers 1
-# _pick_poly_group    flood-fill connected faces sharing material (Element select) #vers 1
-# _proj
-# _selected_set_for_mode    live selection set for given sub-object mode #vers 1
-# _selected_vertex_indices    resolve active selection (any mode) to vertex indices #vers 1
-# _set_angles
-# _set_gizmo
-# _set_theme_bg
-# _show_face_context_menu
-# _to_screen
-# contextMenuEvent
-# fit_to_window
-# flip_horizontal
-# flip_vertical
-# keyPressEvent
-# load_textures
-# mouseMoveEvent
-# mousePressEvent
-# mouseReleaseEvent
-# paintEvent
-# pan
-# reset_view
-# resizeEvent
-# rotate_ccw
-# rotate_cw
-# set_backface
-# set_background_color
-# set_current_file
-# set_current_model
-# set_paint_mode
-# set_render_style
-# set_show_boxes
-# set_show_mesh
-# set_show_spheres
-# set_view_options
-# toggle_gizmo_mode
-# wheelEvent
-# zoom_in
-# zoom_out
-#
-##class ModelListWidget: -
-# __init__
-# on_selection_changed
-# populate_models
-# show_context_menu
 #
 ##class _ModelListDelegate: -
 # paint
 # sizeHint
 #
-##class RibbonManagerDialog: -
-# __init__
-# _build_ui
-# _create_toolbar
-# _delete_toolbar
-# _load_preset
-# _move_action
-# _on_accept
-# _on_action_reordered
-# _on_cancel
-# _on_icon_size_changed
-# _on_toolbar_selected
-# _refresh_action_list
-# _refresh_toolbar_list
-# _save_preset
-#
-##class ModelWorkshop: -
-# __init__
-# _add_geometry_to_dff
-# _add_textures_from_txd
-# _align_dialog
-# _analyze_collision
-# _apply_always_on_top
-# _apply_button_font
-# _apply_button_mode
-# _apply_fonts_to_widgets
-# _apply_hotkey_settings
-# _apply_icon_scale
-# _apply_infobar_font
-# _apply_panel_font
-# _apply_prelighting
-# _apply_settings
-# _apply_theme
-# _apply_title_font
-# _apply_to_selected_faces_paint
-# _apply_window_flags
-# _assign_quad_pane_view
-# _auto_load_from_texlist    scan texlist/ folder for pre-exported textures
-# _auto_load_txd_from_imgs    search open IMG tabs for IDE-linked TXD
-# _browse_texlist_folder    open texlist/ browser dialog
-# _build_col_from_txd
-# _build_menus_into_qmenu
-# _build_model_ide_toolbar
-# _build_model_name_toolbar
-# _build_primitive    generate vertices+triangles for Box/Sphere/Cylinder/Plane
-# _build_toolbars
-# _build_txd_from_textures
-# _change_format
-# _close_col_tab
-# _compress_col
-# _compress_surface
-# _compute_face_shade    Lambertian per-face shade factor (ambient + diffuse) #vers 2
-# _connect_all_buttons
-# _convert_surface
-# _copy_model_info
-# _copy_model_to_clipboard
-# _copy_surface
-# _copy_text_to_clipboard
-# _create_action_section
-# _create_col_from_dff    generate COL1/2/3 binary from DFF geometry #vers 1
-# _create_frame_hierarchy_panel
-# _create_info_section
-# _create_left_panel
-# _create_level_card
-# _create_models_table_panel
-# _create_new_model
-# _create_new_surface
-# _create_paint_bar
-# _create_preview_widget
-# _create_primitive_dialog    dialog to add Box/Sphere/Cylinder/Plane to DFF #vers 1
-# _create_quad_viewport
-# _create_right_panel
-# _create_shadow_mesh
-# _create_stat_box
-# _create_stats_grid
-# _create_status_bar
-# _create_texture_panel
-# _create_toolbar
-# _cycle_render_mode
-# _cycle_view_render_style
-# _delete_selected_model
-# _delete_surface
-# _dff_analyze
-# _dff_copy_geometry
-# _dff_delete_geometry
-# _dff_duplicate_geometry
-# _dff_flip_x
-# _dff_flip_y
-# _dff_get_geometries
-# _dff_get_selected_geom_idx
-# _dff_paste_geometry
-# _dff_rotate_ccw
-# _dff_rotate_cw
-# _dff_to_col_surfaces
-# _dff_transform_vertices
-# _display_dff_model    populate model list + 3D viewport from parsed DFF #vers 3
-# _dock_to_main
-# _draw_col_model
-# _duplicate_selected_model
-# _duplicate_surface
-# _edit_main_surface
-# _enable_dff_toolbar    show/hide DFF-only toolbar buttons #vers 2
-# _enable_move_mode
-# _enable_name_edit
-# _exit_paint_mode
-# _export_col_data
-# _export_col_model
-# _export_dff_obj    export DFF to Wavefront OBJ + MTL #vers 1
-# _export_model_menu
-# _export_not_implemented
-# _export_textures_as_png
-# _export_via_ide
-# _extract_col_from_img
-# _extrude_dialog    prompt for distance, apply extrude to selected faces #vers 1
-# _filter_model_list
-# _find_all_paint_btns
-# _find_col_via_db
-# _find_in_ide    look up model in DAT Browser IDE entries
-# _flip_horizontal_all
-# _flip_vertical_all
-# _focus_search
-# _force_save_col
-# _generate_collision_thumbnail
-# _get_icon_color
-# _get_icon_set
-# _get_ide_db
-# _get_resize_corner
-# _get_resize_direction
-# _get_selected_model
-# _get_view_coords
-# _get_xref
-# _handle_corner_resize
-# _handle_resize
-# _hide_tex_hover    close texture hover popup #vers 1
-# _import_model
-# _import_obj
-# _import_replace_col_model
-# _import_selected
-# _import_surface
-# _import_via_ide
-# _info_ribbon_menu
-# _initialize_features
-# _invert_selection
-# _is_model_pinned
-# _is_on_draggable_area
-# _launch_theme_settings
-# _live_viewports
-# _load_iff_as_qimage
-# _load_img_col_list
-# _load_quad_layout
-# _load_settings
-# _load_texlist_setting
-# _load_txd_file    load TXD file → texture panel + viewport cache
-# _load_txd_file_from_data    load TXD from raw bytes
-# _load_txd_into_workshop
-# _load_viewport_light_settings    restore saved light from model_workshop.json #vers 1
-# _lookup_ide_for_dff    find IDE entry via xref or IDEDatabase #vers 2
-# _lookup_ide_from_db
-# _mirror_dialog
-# _move_info_ribbon
-# _on_col_selected
-# _on_collision_selected
-# _on_compact_col_selected
-# _on_dff_geom_selected
-# _on_dff_geom_selected_tbl    handle model table row click → show geometry #vers 1
-# _on_frame_tree_clicked
-# _on_menu_btn_clicked
-# _on_paint_mode_exited
-# _on_painted_face
-# _on_splitter_moved
-# _on_tex_selected
-# _open_col_file
-# _open_col_from_img_entry
-# _open_dff_material_editor
-# _open_dff_material_list    unified Material Editor (3ds Max style) #vers 5
-# _open_dff_standalone
-# _open_file
-# _open_gl_viewer
-# _open_light_setup_dialog    hemisphere position picker + brightness sliders #vers 2
-# _open_linked_txd    open IDE-linked TXD in TXD Workshop
-# _open_material_editor_or_surface_edit
-# _open_material_list_or_surface_types
-# _open_mipmap_manager
-# _open_paint_editor    open paint mode for face surface editing #vers 5
-# _open_paint_mat_popup
-# _open_render_settings_dialog
-# _open_settings_dialog
-# _open_surface_edit_dialog
-# _open_surface_paint_dialog
-# _open_surface_type_dialog
-# _open_txd_combined    smart DFF+TXD load (DB→IMG→browse)
-# _open_txd_smart
-# _open_txd_standalone
-# _paint_cycle_mat
-# _paint_model_onto
-# _pan_preview
-# _parse_txd_lightweight
-# _pass_textures_to_txd_workshop
-# _paste_model_from_clipboard
-# _paste_surface
-# _pick_background_color
-# _pick_col_from_current_img
-# _populate_collision_list
-# _populate_compact_col_list
-# _populate_dff_detail_table
-# _populate_frame_tree
-# _populate_left_panel_from_img
-# _populate_tex_thumbnails    64×64 thumbnail grid in texture panel #vers 1
-# _populate_texture_list    fill texture panel table from _mod_textures
-# _prelight_setup_dialog    light source setup for prelighting STUB #vers 1
-# _project_model_2d
-# _push_undo
-# _rebuild_toolbars
-# _refresh_icons    refresh all SVG icons after theme change
-# _refresh_main_window
-# _regenerate_all_thumbnails
-# _reload_surface_table
-# _remove_selected_textures
-# _remove_shadow
-# _remove_shadow_mesh
-# _remove_via_ide
-# _rename_col_model
-# _rename_shadow_shortcut
-# _render_collision_preview
-# _reset_hotkeys_to_defaults
-# _restore_outer_layout
-# _restore_toolbar_state
-# _rotate_ccw_all
-# _rotate_cw_all
-# _save_as_col_file
-# _save_col_file
-# _save_file
-# _save_file_as
-# _save_outer_layout
-# _save_quad_layout
-# _save_settings
-# _save_surface_name
-# _save_texlist_setting
-# _save_textures_as_txd    save current textures as new TXD file
-# _save_toolbar_state
-# _saveall_file
-# _scan_available_locales
-# _select_all_models
-# _select_model_by_row
-# _set_checkerboard_bg
-# _set_col_buttons_enabled
-# _set_paint_tool
-# _set_select_mode    switch vertex/edge/face/poly/object select mode #vers 2
-# _set_status
-# _set_texlist_folder    set texlist/ folder via dialog
-# _set_thumbnail_view
-# _setup_hotkeys
-# _setup_settings_button
-# _show_about
-# _show_amiga_locale_error
-# _show_collision_context_menu
-# _show_detailed_info
-# _show_dff_geometry    push _DFFGeometryAdapter into COL3DViewport #vers 1
-# _show_dff_material_context_menu
-# _show_model_details
-# _show_model_search
-# _show_paint_toolbar
-# _show_quad_pane_menu
-# _show_settings_context_menu
-# _show_settings_dialog
-# _show_settings_hotkeys
-# _show_shaders_dialog
-# _show_shadow_mesh
-# _show_sort_menu
-# _show_surface_info
-# _show_tex_hover    hover texture preview popup #vers 1
-# _show_tex_popup
-# _show_window_context_menu
-# _show_workshop_settings
-# _sort_models
-# _sort_models_desc
-# _start_thumbnail_spin
-# _stop_thumbnail_spin
-# _switch_icon_set
-# _sync_middle_btn_row_visibility
-# _sync_quad_from_main
-# _sync_selection_to_other_viewports
-# _tbl_item
-# _tex_context_menu
-# _tick_thumbnail_spin
-# _toggle_backface_cull
-# _toggle_boxes
-# _toggle_col_view
-# _toggle_front_only_paint
-# _toggle_maximize
-# _toggle_mesh
-# _toggle_mid_btn_row_collapsed
-# _toggle_pin_selected
-# _toggle_quad_view
-# _toggle_spheres
-# _toggle_tearoff
-# _toggle_tex_btn_row_collapsed
-# _toggle_tex_view    switch texture panel list/thumbnail view #vers 1
-# _toggle_upscale_native
-# _toggle_viewport_shading    toggle Lambertian shading on/off #vers 1
-# _toolbar_context_menu
-# _uncompress_col
-# _uncompress_surface
-# _undo_last_action
-# _undock_from_main
-# _update_all_buttons
-# _update_cursor
-# _update_dock_button_visibility
-# _update_select_mode_availability
-# _update_status_indicators
-# _update_tex_btn_compact    icon-only when texture panel narrow #vers 1
-# _update_transform_text_panel_visibility
-# _wire_col_buttons
-# _wire_dff_buttons
-# _wrap_middle_panel_with_own_dock_areas
-# closeEvent
-# export_all
-# export_all_surfaces
-# export_selected
-# export_selected_surface
-# get_menu_title
-# load_from_img_archive
-# mouseDoubleClickEvent
-# mouseMoveEvent
-# mousePressEvent
-# mouseReleaseEvent
-# open_col_file
-# open_dff_file    parse and display a DFF file #vers 2
-# open_img_archive
-# open_ribbon_manager
-# paintEvent
-# refresh
-# reload_surface_table
-# resizeEvent
-# save_col_file
-# setup_ui
-# shadow_dialog
-# showEvent
-# show_help
-# show_settings_dialog
-# switch_surface_view
-# toggle_dock_mode
-#
-##class ZoomablePreview: -
-# __init__
-# _draw_checkerboard
-# _update_scaled_pixmap
-# fit_to_window
-# mouseMoveEvent
-# mousePressEvent
-# mouseReleaseEvent
-# paintEvent
-# pan
-# render_collision
-# reset_view
-# rotate_x
-# rotate_y
-# rotate_z
-# setPixmap
-# set_background_color
-# set_checkerboard_background
-# set_model
-# wheelEvent
-# zoom_in
-# zoom_out
-#
-##class COLEditorDialog: -
-# __init__
-# _add_import_export_functionality
-# _create_viewport_controls
-# _import_col_data
-# _set_camera_view
-# _svg_to_icon
-# analyze_file
-# closeEvent
-# connect_signals
-# load_col_file
-# on_model_selected
-# on_property_changed
-# open_file
-# save_file
-# save_file_as
-# setup_ui
-#
-
 # Build information
 App_name = "Map Workshop"
 App_build = "193"
@@ -571,23 +92,54 @@ App_build = "193"
 # Use for: DFF edit button in main toolbar, Model Workshop tab icon.
 # - DFF → Viewport adapter
 
-def quat_to_euler_degrees(x, y, z, w): #vers 1
+def quat_to_euler_degrees(x, y, z, w): #vers 2
     """Convert a quaternion to (roll, pitch, yaw) euler angles in
     degrees - standard formula, round-trip verified against
     euler_degrees_to_quat. Used to present an IPLInstance's rotation
     (stored as a quaternion) as editable X/Y/Z degree values.
-    Ported from map_workshop_old_version.py (Aug 1 2026) - genuinely
-    missing until now, would have raised NameError the moment
-    _InstanceEditPanel.show_for_instance actually ran (found while
-    wiring up double-click-to-edit)."""
+
+    Normalizes its input first (Sep 5 2026  own real,
+    confirmed IPL line showing a raw, non-unit (1,1,1,1) rotation) -
+    this formula assumes a unit quaternion; feeding it a non-
+    normalized one produces mathematically wrong angles, not just an
+    approximation.
+
+    Also now special-cases gimbal lock (|pitch| == 90 degrees) with
+    the standard fallback formula (Sep 5 2026,  "the
+    Rotation line is wrong. I'm wondering where its picking up
+    x146.3 y90 z146.3, doing a search with ds '146.3' its picking up
+    some of the path files") - at gimbal lock, roll and yaw are
+    mathematically underdetermined by a plain atan2 on the raw off-
+    diagonal terms (only their combination is meaningful, not their
+    individual split), so a tiny floating-point difference in the
+    input can swing the extracted roll/yaw between wildly different-
+    looking values even though the actual 3D rotation barely changes.
+    That's what produced the confusing 146.3 - not data leaking from
+    path files (a red herring from my own search; that specific
+    number is a common byproduct of this exact instability, not
+    evidence of real cross-contamination). The standard fallback
+    (roll=0, yaw absorbs the combined twist) gives a stable, sensible
+    result instead."""
+    mag = math.sqrt(x*x + y*y + z*z + w*w)
+    if mag > 1e-9:
+        x, y, z, w = x/mag, y/mag, z/mag, w/mag
     sinr_cosp = 2 * (w * x + y * z)
     cosr_cosp = 1 - 2 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
     sinp = 2 * (w * y - z * x)
-    pitch = math.copysign(math.pi / 2, sinp) if abs(sinp) >= 1 else math.asin(sinp)
     siny_cosp = 2 * (w * z + x * y)
     cosy_cosp = 1 - 2 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
+    if sinp >= 1.0 - 1e-7:
+        pitch = math.pi / 2
+        roll = 0.0
+        yaw = -2 * math.atan2(x, w)
+    elif sinp <= -1.0 + 1e-7:
+        pitch = -math.pi / 2
+        roll = 0.0
+        yaw = 2 * math.atan2(x, w)
+    else:
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        pitch = math.asin(sinp)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
     return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
 
 
@@ -609,8 +161,21 @@ def euler_degrees_to_quat(roll_deg, pitch_deg, yaw_deg): #vers 1
 # Model Workshop icon available: SVGIconFactory.model_workshop_icon()
 # Use for: DFF edit button in main toolbar, Model Workshop tab icon.
 # - DFF → Viewport adapter
+
+def _write_ipl_lines(path: str, lines: list) -> None: #vers 1
+    """Write text lines back to an IPL/DAT the safe way: journal + timestamped backup
+    of the existing file (raises if the backup fails), atomic write, latin-1 so no byte
+    is dropped, and the file's own line ending (new lines get CRLF in a CRLF file)."""
+    from apps.methods.file_backup import safe_write_bytes
+    crlf = any(l.endswith('\r\n') for l in lines)
+    eol = '\r\n' if crlf else '\n'
+    out = [(l.rstrip('\r\n') + eol) if l.endswith('\n') else l for l in lines]
+    safe_write_bytes(path, ''.join(out).encode('latin-1', errors='replace'),
+                     f"Map Workshop: save {os.path.basename(path)}")
+
+
 class _DFFGeometryAdapter:
-    """Adapts a DFF Geometry for use with COL3DViewport.
+    """Adapts a DFF Geometry for use with DFFViewport.
 
     The viewport expects model.vertices (objects with .x .y .z) and
     model.faces (objects with .vertex_indices or .a .b .c).
@@ -628,47 +193,7 @@ class _DFFGeometryAdapter:
             self.c = tri.v3
             self.material = tri.material_id
 
-    class _V3:
-        """Lightweight Vector3 for transformed vertices."""
-        __slots__ = ('x', 'y', 'z')
-        def __init__(self, x, y, z): self.x = x; self.y = y; self.z = z  #vers 1
 
-    @staticmethod
-    def _world_matrix(frames, frame_idx): #vers 1
-        """Accumulate rotation+position up the frame parent chain.
-        Returns (rot3x3_flat, tx, ty, tz) in world space."""
-        # Identity
-        r = [1,0,0, 0,1,0, 0,0,1]
-        tx, ty, tz = 0.0, 0.0, 0.0
-        visited = set()
-        idx = frame_idx
-        chain = []
-        while 0 <= idx < len(frames) and idx not in visited:
-            visited.add(idx)
-            chain.append(frames[idx])
-            idx = frames[idx].parent_index
-        # Apply from root down
-        for frame in reversed(chain):
-            fr = frame.rotation  # 9 floats, row-major
-            fp = frame.position
-            # new_r = r * fr
-            nr = [
-                r[0]*fr[0]+r[1]*fr[3]+r[2]*fr[6],
-                r[0]*fr[1]+r[1]*fr[4]+r[2]*fr[7],
-                r[0]*fr[2]+r[1]*fr[5]+r[2]*fr[8],
-                r[3]*fr[0]+r[4]*fr[3]+r[5]*fr[6],
-                r[3]*fr[1]+r[4]*fr[4]+r[5]*fr[7],
-                r[3]*fr[2]+r[4]*fr[5]+r[5]*fr[8],
-                r[6]*fr[0]+r[7]*fr[3]+r[8]*fr[6],
-                r[6]*fr[1]+r[7]*fr[4]+r[8]*fr[7],
-                r[6]*fr[2]+r[7]*fr[5]+r[8]*fr[8],
-            ]
-            # new_t = r * fp + t
-            ntx = r[0]*fp.x + r[1]*fp.y + r[2]*fp.z + tx
-            nty = r[3]*fp.x + r[4]*fp.y + r[5]*fp.z + ty
-            ntz = r[6]*fp.x + r[7]*fp.y + r[8]*fp.z + tz
-            r, tx, ty, tz = nr, ntx, nty, ntz
-        return r, tx, ty, tz
 
     def __init__(self, geometry, geometry_index: int = 0, dff_model=None, atomic=None): #vers 2
         self._geometry = geometry
@@ -692,2121 +217,6 @@ class _DFFGeometryAdapter:
 
     def __repr__(self): #vers 1
         return f"<_DFFGeometryAdapter {self.name} {self.vertex_count}v {self.face_count}f>"
-
-
-class COL3DViewport(QWidget): #vers 2
-    """COL preview viewport.
-    Left-drag = pan, Right-drag = free rotate, Scroll = zoom, Middle = pan.
-    G key / button = translate gizmo, R key / button = rotate gizmo.
-    """
-
-    def __init__(self, parent=None): #vers 1
-        super().__init__(parent)
-        self.setMinimumSize(200, 200)
-        self._model        = None
-        self._yaw          = 30.0
-        self._pitch        = 20.0   # degrees — 0=side view, 90=top, -90=bottom
-        self._zoom         = 1.0
-        self._pan_x        = 0.0
-        self._pan_y        = 0.0
-        self._flip_h       = False
-        self._flip_v       = False
-        self._show_spheres = True
-        self._show_boxes   = True
-        self._show_mesh    = True
-        self._backface     = False
-        self._render_style = 'semi'
-        self._tex_cache    = {}       # tex_name → QImage for textured render
-        # Default background — will be overridden by _set_theme_bg() on first paint
-        self._bg_color     = (25, 25, 35)
-        self._theme_bg_set = False  # flag so we only auto-set once
-        # drag state
-        self._left_drag    = None
-        self._right_drag   = None
-        self._mid_drag     = None
-        # gizmo
-        self._gizmo_mode   = 'translate'  # 'translate' | 'rotate'
-        self._gizmo_drag   = None         # 'X'|'Y'|'Z' while dragging
-        self._gizmo_start  = None
-        # face selection / paint state
-        self._selected_faces  = set()    # set of face indices currently selected
-        self._selected_verts  = set()    # set of vertex indices currently selected
-        self._selected_edges  = set()    # set of (vi, vj) tuples, vi < vj, currently selected
-        self._select_mode     = 'face'   # 'vertex' | 'edge' | 'face' | 'poly' | 'object'
-        self._paint_mode      = False    # True = click face to paint material
-        self._paint_material  = 0
-        self._tool_mode       = 'select'  # 'select' | 'paint' | 'dropper' | 'select_all_mat'
-        self._dropper_active  = False        # material id to apply in paint mode
-        self.on_face_selected = None     # callback(face_index, face) when face clicked
-        self._drag_selecting  = False    # True while LMB held after face click
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
-        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
-        # Viewport lighting state (used by _compute_face_shade in workshop)
-        self._shading_enabled = True
-        self._backface_cull   = True               # cull back faces in solid/textured
-        self._light_dir       = (0.5, 0.5, 0.8, 0.0)   # normalised XYZ toward light, W=0 (directional)
-        self._light_ambient   = 0.30               # 0..1
-        self._light_intensity = 1.0                # 0..2 multiplier
-
-
-    # - public API
-    def set_current_file(self, col_file): pass  #vers 1
-    def set_view_options(self, **kw):     pass  #vers 1
-
-
-    def set_current_model(self, model, index=0): #vers 3
-        self._model = model
-        self._tex_diag_done = False
-        self._sort_cache = None
-        self._tex_diag2_done = False
-        self._sort_yaw   = None
-        # Reset view so the new model is centred and visible
-        self._pan_x = 0.0
-        self._pan_y = 0.0
-        self._zoom  = 1.0
-        self.update()
-
-
-    def zoom_in(self): #vers 1
-        self._zoom = min(20.0, self._zoom * 1.25); self.update()
-
-
-    def zoom_out(self): #vers 1
-        self._zoom = max(0.05, self._zoom / 1.25); self.update()
-
-
-    def reset_view(self): #vers 1
-        self._yaw = 30.0; self._pitch = 20.0
-        self._zoom = 1.0; self._pan_x = self._pan_y = 0.0
-        self._flip_h = self._flip_v = False
-        self.update()
-
-
-    def fit_to_window(self): #vers 1
-        self._pan_x = self._pan_y = 0.0; self._zoom = 1.0; self.update()
-
-    def pan(self, dx, dy): #vers 1
-        self._pan_x += dx; self._pan_y += dy; self.update()
-
-
-    def rotate_cw(self): #vers 1
-        self._yaw = (self._yaw + 90) % 360; self.update()
-
-
-    def rotate_ccw(self): #vers 1
-        self._yaw = (self._yaw - 90) % 360; self.update()
-
-    def flip_horizontal(self): #vers 1
-        self._flip_h = not self._flip_h; self.update()
-
-    def flip_vertical(self): #vers 1
-        self._flip_v = not self._flip_v; self.update()
-
-    def set_background_color(self, rgb): #vers 1
-        self._bg_color = rgb; self._theme_bg_set = True; self.update()
-
-    def _get_ui_color(self, key): #vers 1
-        """Get a theme-aware QColor from app_settings. No hardcoded colors."""
-        from PyQt6.QtGui import QColor
-        try:
-            app_settings = getattr(self, 'app_settings', None) or \
-                getattr(getattr(self, 'main_window', None), 'app_settings', None)
-            if app_settings and hasattr(app_settings, 'get_ui_color'):
-                return app_settings.get_ui_color(key)
-        except Exception:
-            pass
-        # Palette fallback - no hardcoded values
-        pal = self.palette()
-        if key == 'viewport_bg':
-            return pal.color(pal.ColorRole.Base)
-        if key == 'viewport_text':
-            return pal.color(pal.ColorRole.PlaceholderText)
-        return pal.color(pal.ColorRole.WindowText)
-
-    def _set_theme_bg(self, palette): #vers 1
-        """Set background from palette — light theme=white, dark=near-black."""
-        if self._theme_bg_set:
-            return  # user manually picked a colour — respect it
-        win = palette.color(palette.ColorRole.Window)
-        if win.lightness() > 128:   # light theme
-            self._bg_color = (245, 245, 245)
-        else:                        # dark theme
-            self._bg_color = (25, 25, 35)
-
-
-    def set_show_spheres(self, v): #vers 1
-        self._show_spheres = v; self.update()
-
-
-    def set_show_boxes(self, v): #vers 1
-        self._show_boxes = v; self.update()
-
-
-    def set_show_mesh(self, v): #vers 1
-        self._show_mesh = v; self.update()
-
-
-    def set_backface(self, v): #vers 1
-        self._backface = v; self.update()
-
-
-    def load_textures(self, mod_textures: list): #vers 2
-        """Build QImage cache from _mod_textures list for textured rendering.
-        Call this whenever _load_txd_file() populates the texture panel."""
-        from PyQt6.QtGui import QImage
-        self._tex_cache.clear()
-        print(f"[TEX] load_textures: {len(mod_textures)} entries")
-        for tex in mod_textures:
-            name = tex.get('name', '').lower()
-            fmt  = tex.get('format', '?')
-            rgba = tex.get('rgba_data', b'')
-            w    = tex.get('width',  0)
-            h    = tex.get('height', 0)
-            print(f"  tex name={name!r} fmt={fmt} w={w} h={h} rgba_len={len(rgba)}")
-            if not name:
-                continue
-            if rgba and w > 0 and h > 0:
-                try:
-                    img = QImage(rgba, w, h, w * 4, QImage.Format.Format_RGBA8888)
-                    self._tex_cache[name] = img.copy()
-                    print(f"    cached ok: {name!r}")
-                except Exception as e:
-                    print(f"    QImage error: {e}")
-            else:
-                print(f"    SKIPPED: rgba={bool(rgba)} w={w} h={h}")
-        print(f"[TEX] cache keys: {list(self._tex_cache.keys())}")
-        self.update()
-
-
-    def set_render_style(self, s): #vers 1
-        """Set render style: wireframe / semi / solid / textured."""
-        self._render_style = s; self.update()
-
-
-    def toggle_gizmo_mode(self): #vers 1
-        self._gizmo_mode = 'rotate' if self._gizmo_mode == 'translate' else 'translate'
-        self._gizmo_drag = None
-        self.update()
-
-
-    def _set_gizmo(self, mode): #vers 1
-        self._gizmo_mode = mode; self._gizmo_drag = None; self.update()
-
-
-    # - projection (self-contained, no workshop needed)
-    def _proj(self, x, y, z): #vers 2
-        """Project 3D world point → 2D screen pixel.
-        GTA coordinate system: X=right, Y=forward, Z=up (right-hand Z-up).
-        Screen Y is DOWN so we negate the vertical component.
-        Yaw rotates around Z (world up), pitch tilts the camera up/down."""
-        import math
-        yr = math.radians(self._yaw);   cy, sy = math.cos(yr), math.sin(yr)
-        pr = math.radians(self._pitch); cp, sp = math.cos(pr), math.sin(pr)
-        # Rotate around Z axis (yaw)
-        rx =  x*cy - y*sy      # screen X — right
-        ry =  x*sy + y*cy      # depth
-        # Tilt around screen-X axis (pitch): Z-up becomes screen-up
-        # Negate result because screen-Y points DOWN but world-Z points UP
-        screen_x = rx
-        screen_y = -(ry*sp + z*cp)   # negate for screen coords
-        return screen_x, screen_y
-
-
-    def _get_scale_origin(self): #vers 1
-        """Return (scale, ox, oy) mapping 3D projected coords to screen pixels."""
-        W, H = self.width(), self.height()
-        model = self._model
-        if not model:
-            return 50.0 * self._zoom, W/2 + self._pan_x, H/2 + self._pan_y
-
-        verts = getattr(model, 'vertices', [])
-        spheres = getattr(model, 'spheres', [])
-        boxes   = getattr(model, 'boxes',   [])
-
-        pts3 = [(v.x, v.y, v.z) for v in verts]
-        for s in spheres:
-            c = s.center; r = s.radius
-            cx,cy,cz = (c.x,c.y,c.z) if hasattr(c,'x') else (c[0],c[1],c[2])
-            pts3 += [(cx-r,cy,cz),(cx+r,cy,cz),(cx,cy-r,cz),(cx,cy+r,cz),(cx,cy,cz-r),(cx,cy,cz+r)]
-        for b in boxes:
-            mn = b.min if not hasattr(b,'min_point') else b.min_point
-            mx = b.max if not hasattr(b,'max_point') else b.max_point
-            for p in [mn, mx]:
-                pts3.append((p.x,p.y,p.z) if hasattr(p,'x') else (p[0],p[1],p[2]))
-
-        if not pts3:
-            return 50.0 * self._zoom, W/2 + self._pan_x, H/2 + self._pan_y
-
-        pts2 = [self._proj(x,y,z) for x,y,z in pts3]
-        xs = [p[0] for p in pts2]; ys = [p[1] for p in pts2]
-        rng = max(max(xs)-min(xs), max(ys)-min(ys), 0.001)
-        pad = 40
-        base_scale = (min(W,H) - pad*2) / rng
-        scale = base_scale * self._zoom
-        cx2 = (min(xs)+max(xs))/2; cy2 = (min(ys)+max(ys))/2
-        ox = W/2 - cx2*scale + self._pan_x
-        oy = H/2 - cy2*scale + self._pan_y
-        return scale, ox, oy
-
-    def _to_screen(self, x, y, z): #vers 1
-        scale, ox, oy = self._get_scale_origin()
-        px, py = self._proj(x, y, z)
-        return px*scale + ox, py*scale + oy
-
-
-    # - gizmo hit test
-    def _gizmo_centre(self): #vers 1
-        """Screen coords of gizmo origin (model centroid)."""
-        model = self._model
-        if not model: return None
-        verts = getattr(model, 'vertices', [])
-        if verts:
-            cx = sum(v.x for v in verts)/len(verts)
-            cy = sum(v.y for v in verts)/len(verts)
-            cz = sum(v.z for v in verts)/len(verts)
-        else:
-            cx = cy = cz = 0.0
-        return self._to_screen(cx, cy, cz)
-
-
-    def _gizmo_arm(self): #vers 1
-        return max(45, min(self.width(), self.height()) * 0.15)
-
-
-    def _hit_gizmo(self, mx, my): #vers 1
-        """Return axis 'X'/'Y'/'Z' if click near a gizmo handle, else None."""
-        import math
-        ctr = self._gizmo_centre()
-        if not ctr: return None
-        gx, gy = ctr
-        arm = self._gizmo_arm()
-        best, best_d = None, 16
-        for (dx,dy,dz), name in [((1,0,0),'X'),((0,1,0),'Y'),((0,0,1),'Z')]:
-            px, py = self._proj(dx, dy, dz)
-            tx, ty = gx+px*arm, gy+py*arm
-            if math.hypot(mx-tx, my-ty) < best_d:
-                best_d, best = math.hypot(mx-tx, my-ty), name
-        return best
-
-
-    def set_paint_mode(self, enabled: bool, material_id: int = 0): #vers 1
-        """Enable/disable paint mode. In paint mode LMB click paints a face."""
-        self._paint_mode     = enabled
-        self._paint_material = material_id
-        self._selected_faces = set()
-        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.OpenHandCursor)
-        self.update()
-
-
-    def _pick_face(self, mx, my): #vers 1
-        """Return (face_index, face) of the closest face whose projected centroid
-        is within 20px of click, or (None, None)."""
-        import math
-        model = self._model
-        if not model: return None, None
-        verts = getattr(model, 'vertices', [])
-        faces = getattr(model, 'faces',   [])
-        if not verts or not faces: return None, None
-
-        scale, ox, oy = self._get_scale_origin()
-
-        def ts(x, y, z): #vers 1
-            px, py = self._proj(x, y, z)
-            return px * scale + ox, py * scale + oy
-
-        def g3(obj): #vers 1
-            if hasattr(obj, 'x'): return obj.x, obj.y, obj.z
-            return float(obj[0]), float(obj[1]), float(obj[2])
-
-        best_i, best_d = None, 20.0   # 20px pick radius
-        for i, face in enumerate(faces):
-            fa = getattr(face, 'a', None)
-            if fa is None: continue
-            try:
-                ax, ay, az = g3(verts[face.a])
-                bx, by, bz = g3(verts[face.b])
-                cx, cy, cz = g3(verts[face.c])
-            except IndexError: continue
-            # centroid in screen space
-            sx, sy = ts((ax+bx+cx)/3, (ay+by+cy)/3, (az+bz+cz)/3)
-            d = math.hypot(mx - sx, my - sy)
-            if d < best_d:
-                best_d, best_i = d, i
-
-        if best_i is not None:
-            return best_i, faces[best_i]
-        return None, None
-
-    def _face_material_id(self, face): #vers 1
-        """Normalise a face's material to a plain int id, matching the
-        hasattr(material_id)-or-int idiom used throughout this file."""
-        mat = getattr(face, 'material', None)
-        if mat is None:
-            return None
-        return mat.material_id if hasattr(mat, 'material_id') else int(mat)
-
-    def _build_face_adjacency(self, faces): #vers 1
-        """Build a face_index -> set(neighbour_face_index) map, where two
-        faces are neighbours if they share an edge (two vertex indices, in
-        either order). Built fresh each call — meshes are edited often
-        enough that a cached version would risk going stale silently."""
-        edge_to_faces = {}
-        for fi, face in enumerate(faces):
-            fa = getattr(face, 'a', None)
-            if fa is None:
-                continue
-            a, b, c = face.a, face.b, face.c
-            for i, j in ((a, b), (b, c), (c, a)):
-                key = (i, j) if i < j else (j, i)
-                edge_to_faces.setdefault(key, []).append(fi)
-
-        adjacency = {fi: set() for fi in range(len(faces))}
-        for key, owners in edge_to_faces.items():
-            if len(owners) < 2:
-                continue
-            for fi in owners:
-                for fj in owners:
-                    if fi != fj:
-                        adjacency[fi].add(fj)
-        return adjacency
-
-    def _pick_poly_group(self, mx, my): #vers 1
-        """Return (set(face_indices), seed_face) for the connected group of
-        faces reachable from the clicked face via shared edges, stopping at
-        material boundaries — equivalent to 3ds Max Element/Polygon select
-        on a model split into material-bound shells. Returns (None, None)
-        if nothing was clicked."""
-        seed_i, seed_face = self._pick_face(mx, my)
-        if seed_i is None:
-            return None, None
-
-        model = self._model
-        faces = getattr(model, 'faces', [])
-        seed_mat = self._face_material_id(seed_face)
-        adjacency = self._build_face_adjacency(faces)
-
-        group = {seed_i}
-        frontier = [seed_i]
-        while frontier:
-            fi = frontier.pop()
-            for fj in adjacency.get(fi, ()):
-                if fj in group:
-                    continue
-                if self._face_material_id(faces[fj]) != seed_mat:
-                    continue
-                group.add(fj)
-                frontier.append(fj)
-
-        return group, seed_face
-
-
-        """Return (vertex_index, vertex) of the closest vertex within 10px of
-        click, or (None, None). Tighter radius than face pick since vertex
-        points are small targets."""
-        import math
-        model = self._model
-        if not model: return None, None
-        verts = getattr(model, 'vertices', [])
-        if not verts: return None, None
-
-        scale, ox, oy = self._get_scale_origin()
-
-        def ts(x, y, z): #vers 1
-            px, py = self._proj(x, y, z)
-            return px * scale + ox, py * scale + oy
-
-        def g3(obj): #vers 1
-            if hasattr(obj, 'x'): return obj.x, obj.y, obj.z
-            return float(obj[0]), float(obj[1]), float(obj[2])
-
-        best_i, best_d = None, 10.0   # 10px pick radius — tighter than face
-        for i, v in enumerate(verts):
-            try:
-                vx, vy, vz = g3(v)
-            except (IndexError, TypeError):
-                continue
-            sx, sy = ts(vx, vy, vz)
-            d = math.hypot(mx - sx, my - sy)
-            if d < best_d:
-                best_d, best_i = d, i
-
-        if best_i is not None:
-            return best_i, verts[best_i]
-        return None, None
-
-    def _pick_edge(self, mx, my): #vers 1
-        """Return (edge_key, (vi, vj)) of the closest edge whose projected
-        midpoint is within 12px of click, or (None, None). edge_key is a
-        normalised (vi, vj) tuple with vi < vj. Edges are derived from face
-        triangle sides, deduplicated."""
-        import math
-        model = self._model
-        if not model: return None, None
-        verts = getattr(model, 'vertices', [])
-        faces = getattr(model, 'faces',   [])
-        if not verts or not faces: return None, None
-
-        scale, ox, oy = self._get_scale_origin()
-
-        def ts(x, y, z): #vers 1
-            px, py = self._proj(x, y, z)
-            return px * scale + ox, py * scale + oy
-
-        def g3(obj): #vers 1
-            if hasattr(obj, 'x'): return obj.x, obj.y, obj.z
-            return float(obj[0]), float(obj[1]), float(obj[2])
-
-        # Collect unique edges from triangle sides
-        edges = set()
-        for face in faces:
-            fa = getattr(face, 'a', None)
-            if fa is None: continue
-            a, b, c = face.a, face.b, face.c
-            for i, j in ((a,b), (b,c), (c,a)):
-                edges.add((i, j) if i < j else (j, i))
-
-        best_key, best_d = None, 12.0   # 12px pick radius
-        for (i, j) in edges:
-            try:
-                ax, ay, az = g3(verts[i])
-                bx, by, bz = g3(verts[j])
-            except IndexError:
-                continue
-            sx, sy = ts((ax+bx)/2, (ay+by)/2, (az+bz)/2)
-            d = math.hypot(mx - sx, my - sy)
-            if d < best_d:
-                best_d, best_key = d, (i, j)
-
-        if best_key is not None:
-            return best_key, best_key
-        return None, None
-
-    def _selected_set_for_mode(self, mode): #vers 1
-        """Return the live selection set for the given sub-object mode."""
-        if mode == 'vertex':
-            return self._selected_verts
-        if mode == 'edge':
-            return self._selected_edges
-        return self._selected_faces   # 'face' and 'poly' share one set for now
-
-    def _apply_selection_click(self, mode, key, modifiers): #vers 1
-        """Apply a single click selection for the given mode ('vertex'|'edge'|
-        'face'). Ctrl+click toggles the item in/out of the existing selection;
-        a plain click replaces the selection with just this item. Shift+click
-        adds without replacing (used by drag-select too)."""
-        sel = self._selected_set_for_mode(mode)
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            if key in sel:
-                sel.discard(key)
-            else:
-                sel.add(key)
-        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
-            sel.add(key)
-        else:
-            sel.clear()
-            sel.add(key)
-
-    def _selected_vertex_indices(self): #vers 1
-        """Resolve the active sub-object selection, whatever mode it's in,
-        down to a concrete set of vertex indices. Vertex mode returns its
-        set directly; edge mode expands each (vi, vj) pair; face/poly mode
-        expands each face's three corner vertices. Returns an empty set if
-        nothing is selected — callers should treat that as 'no scoped
-        selection, fall back to whole-model' rather than 'select nothing'."""
-        mode = getattr(self, '_select_mode', 'face')
-        model = self._model
-        faces = getattr(model, 'faces', []) if model else []
-
-        if mode == 'vertex':
-            return set(self._selected_verts)
-
-        if mode == 'edge':
-            verts = set()
-            for (vi, vj) in self._selected_edges:
-                verts.add(vi)
-                verts.add(vj)
-            return verts
-
-        # 'face' / 'poly'
-        verts = set()
-        for fi in self._selected_faces:
-            if 0 <= fi < len(faces):
-                face = faces[fi]
-                fa = getattr(face, 'a', None)
-                if fa is not None:
-                    verts.add(face.a)
-                    verts.add(face.b)
-                    verts.add(face.c)
-        return verts
-
-    def _extrude_selected_faces(self, distance: float): #vers 1
-        """Extrude the currently selected faces along their averaged normal
-        by `distance` (positive = outward, negative = inward/push-in).
-
-        Mutates the real DFF Geometry behind this adapter directly (not just
-        the viewport's display copies), so the result persists on save:
-          1. Every vertex used by a selected face is duplicated (position,
-             normal, colour, all UV layers carried over) - shared vertices
-             between two selected faces are duplicated only once, so the
-             extruded cap stays welded together.
-          2. The selected faces' triangles are repointed to the new
-             duplicate vertices - this becomes the cap (the moved face).
-          3. Side-wall triangles are built along the boundary edges of the
-             selected island (edges used by exactly one selected face) to
-             connect the original ring to the new cap ring.
-          4. The duplicate vertices are immediately offset by `distance`
-             along the averaged face normal.
-          5. Selection is updated to the new cap faces, so a following
-             gizmo drag (translate/rotate) continues to act on the
-             extruded result rather than the original base.
-
-        Returns True on success, False if there is nothing to extrude
-        (no model, no selected faces, or not in face/poly select mode)."""
-        import math
-
-        model = self._model
-        if model is None:
-            return False
-        geom = getattr(model, '_geometry', None)
-        if geom is None:
-            return False   # not a real DFF adapter (e.g. COL box/sphere editing)
-
-        sel_faces = sorted(self._selected_faces)
-        if not sel_faces:
-            return False
-
-        faces = getattr(model, 'faces', [])
-        verts = getattr(model, 'vertices', [])
-
-        # - 1. Build duplicate-vertex map for every vert used by a selected face
-        used_verts = set()
-        for fi in sel_faces:
-            if 0 <= fi < len(faces):
-                f = faces[fi]
-                used_verts.add(f.a); used_verts.add(f.b); used_verts.add(f.c)
-
-        if not used_verts:
-            return False
-
-        # Ensure parallel arrays exist and are long enough before indexing
-        n_verts = len(geom.vertices)
-        from apps.components.Model_Editor.depends.dff_classes import Vector3, TexCoord
-        if len(geom.normals) < n_verts:
-            geom.normals.extend([Vector3() for _ in range(n_verts - len(geom.normals))])
-        for layer in geom.uv_layers:
-            if len(layer) < n_verts:
-                layer.extend([TexCoord() for _ in range(n_verts - len(layer))])
-
-        import copy
-        dup_of = {}   # original vert index -> new vert index
-        for vi in used_verts:
-            new_vec = copy.deepcopy(geom.vertices[vi])
-            geom.vertices.append(new_vec)
-            new_idx = len(geom.vertices) - 1
-
-            if vi < len(geom.normals):
-                geom.normals.append(copy.deepcopy(geom.normals[vi]))
-            else:
-                geom.normals.append(Vector3())
-
-            if vi < len(geom.colors):
-                geom.colors.append(copy.deepcopy(geom.colors[vi]))
-
-            for layer in geom.uv_layers:
-                if vi < len(layer):
-                    layer.append(copy.deepcopy(layer[vi]))
-
-            dup_of[vi] = new_idx
-
-        # - 2. Compute averaged face normal (for extrude direction) using
-        #      ORIGINAL (pre-duplicate) positions
-        def g3(v):  #vers 1
-            return (v.x, v.y, v.z) if hasattr(v, 'x') else (float(v[0]), float(v[1]), float(v[2]))
-
-        nx, ny, nz = 0.0, 0.0, 0.0
-        for fi in sel_faces:
-            f = faces[fi]
-            ax, ay, az = g3(verts[f.a])
-            bx, by, bz = g3(verts[f.b])
-            cx, cy, cz = g3(verts[f.c])
-            ux, uy, uz = bx-ax, by-ay, bz-az
-            vx, vy, vz = cx-ax, cy-ay, cz-az
-            fnx = uy*vz - uz*vy
-            fny = uz*vx - ux*vz
-            fnz = ux*vy - uy*vx
-            nx += fnx; ny += fny; nz += fnz
-        n_len = math.sqrt(nx*nx + ny*ny + nz*nz) or 1.0
-        nx, ny, nz = nx/n_len, ny/n_len, nz/n_len
-
-        # - 3. Boundary edges of the selected island (used by exactly one
-        #      selected face) need a side wall; interior shared edges don't
-        edge_count = {}
-        for fi in sel_faces:
-            f = faces[fi]
-            a, b, c = f.a, f.b, f.c
-            for i, j in ((a,b), (b,c), (c,a)):
-                key = (i, j) if i < j else (j, i)
-                edge_count[key] = edge_count.get(key, 0) + 1
-        boundary_edges = [e for e, n in edge_count.items() if n == 1]
-
-        # - 4. Repoint selected triangles to the duplicate vertices (cap)
-        new_face_indices = []
-        for fi in sel_faces:
-            f = faces[fi]
-            geom.triangles[fi].v1 = dup_of[f.a]
-            geom.triangles[fi].v2 = dup_of[f.b]
-            geom.triangles[fi].v3 = dup_of[f.c]
-            new_face_indices.append(fi)
-
-        # - 5. Build side-wall triangles along boundary edges, original
-        #      material carried over from whichever selected face owned it
-        from apps.components.Model_Editor.depends.dff_classes import Triangle
-        cap_material = geom.triangles[sel_faces[0]].material_id if geom.triangles else 0
-        for (i, j) in boundary_edges:
-            di, dj = dup_of[i], dup_of[j]
-            geom.triangles.append(Triangle(v1=i,  v2=j,  v3=dj, material_id=cap_material))
-            geom.triangles.append(Triangle(v1=i,  v2=dj, v3=di, material_id=cap_material))
-            new_face_indices.append(len(geom.triangles) - 2)
-            new_face_indices.append(len(geom.triangles) - 1)
-
-        # - 6. Offset the duplicate (cap) vertices along the averaged normal
-        for new_idx in dup_of.values():
-            v = geom.vertices[new_idx]
-            v.x += nx * distance
-            v.y += ny * distance
-            v.z += nz * distance
-
-        # Refresh the workshop's adapters/viewport from the mutated geometry,
-        # then re-resolve selection against the freshly rebuilt face list
-        # (adapter is rebuilt, so old `faces` list/objects are now stale)
-        ws = self._find_workshop()
-        if ws:
-            dff_model = getattr(ws, '_current_dff_model', None)
-            if dff_model is not None:
-                ws._display_dff_model(dff_model)
-                vp = getattr(ws, 'preview_widget', None)
-                if vp is self:
-                    # _display_dff_model rebuilds adapters; re-point to the
-                    # one matching this geometry and restore selection
-                    for adapter in getattr(ws, '_dff_adapters', []):
-                        if adapter._geometry is geom:
-                            self._model = adapter
-                            break
-                    self._selected_faces = set(new_face_indices)
-        self.update()
-        return True
-
-    def _snap_vertices(self, threshold=0.05): #vers 2
-        """Close gaps in a mesh by moving nearby vertices together
-        (Aug 20 2026, per Keith: "the biggest problem sometimes with
-        making models is sometimes there are gaps, so we need a snap
-        function" - confirmed to also mean this, vertex-level, mesh-
-        editing sense, alongside the already-existing, separate
-        instance-level "Snap: Centre of Model" feature on the Snap
-        Targets ribbon: "both using different svg icons").
-
-        Real, deliberately safe first version: groups vertices within
-        threshold world units of each other into clusters and moves
-        every vertex in a cluster to that cluster's own centroid -
-        closes the visual gap without actually merging/deduplicating
-        the vertices themselves (a full topology-changing weld, which
-        would also need face-index remapping, is a real, separate,
-        harder problem left for later if this isn't enough on its
-        own). Operates on the current selection if one exists
-        (whichever select mode is active, via _selected_vertex_
-        indices), or the whole model if nothing is selected.
-
-        Returns the number of vertices actually moved."""
-        model = self._model
-        if model is None:
-            return 0
-        geom = getattr(model, '_geometry', None)
-        if geom is None:
-            return 0   # not a real DFF adapter (e.g. COL box/sphere editing)
-
-        scoped = self._selected_vertex_indices()
-        indices = sorted(scoped) if scoped else list(range(len(geom.vertices)))
-        if len(indices) < 2:
-            return 0
-
-        # Group into clusters by proximity (simple, safe O(n^2) pass -
-        # scoped selections keep this small in practice; a full-model
-        # snap on a very large mesh could be slow, but correctness
-        # matters more than speed for a first, real version of this).
-        clusters = []
-        assigned = set()
-        for i, vi in enumerate(indices):
-            if vi in assigned:
-                continue
-            v = geom.vertices[vi]
-            cluster = [vi]
-            assigned.add(vi)
-            for vj in indices[i + 1:]:
-                if vj in assigned:
-                    continue
-                w = geom.vertices[vj]
-                dist = ((v.x - w.x) ** 2 + (v.y - w.y) ** 2 + (v.z - w.z) ** 2) ** 0.5
-                if dist <= threshold:
-                    cluster.append(vj)
-                    assigned.add(vj)
-            if len(cluster) > 1:
-                clusters.append(cluster)
-
-        if not clusters:
-            return 0
-
-        # Compute each real cluster's own real centroid once, upfront
-        # - both the initial move and redo below replay these exact,
-        # pre-computed values directly, rather than each recomputing
-        # its own centroid from (possibly already-moved) live data.
-        centroids = []
-        old_positions = {}
-        for cluster in clusters:
-            cx = sum(geom.vertices[vi].x for vi in cluster) / len(cluster)
-            cy = sum(geom.vertices[vi].y for vi in cluster) / len(cluster)
-            cz = sum(geom.vertices[vi].z for vi in cluster) / len(cluster)
-            centroids.append((cx, cy, cz))
-            for vi in cluster:
-                v = geom.vertices[vi]
-                old_positions[vi] = (v.x, v.y, v.z)
-
-        def _apply_centroids():
-            for cluster, (cx, cy, cz) in zip(clusters, centroids):
-                for vi in cluster:
-                    v = geom.vertices[vi]
-                    v.x, v.y, v.z = cx, cy, cz
-
-        def _apply_old_positions():
-            for vi, (ox, oy, oz) in old_positions.items():
-                v = geom.vertices[vi]
-                v.x, v.y, v.z = ox, oy, oz
-
-        _apply_centroids()
-        moved = len(old_positions)
-
-        ws = self._find_workshop()
-        if ws:
-            dff_model = getattr(ws, '_current_dff_model', None)
-            if dff_model is not None:
-                ws._display_dff_model(dff_model)
-                vp = getattr(ws, 'preview_widget', None)
-                if vp is self:
-                    for adapter in getattr(ws, '_dff_adapters', []):
-                        if adapter._geometry is geom:
-                            self._model = adapter
-                            break
-
-            def _undo():
-                _apply_old_positions()
-                ws._display_dff_model(dff_model)
-                self.update()
-
-            def _redo():
-                _apply_centroids()
-                ws._display_dff_model(dff_model)
-                self.update()
-
-            if hasattr(ws, '_push_map_undo'):
-                ws._push_map_undo(_undo, _redo, f"Snap {moved} vertex/vertices")
-        self.update()
-        return moved
-
-
-
-    # - mouse
-    def mousePressEvent(self, event): #vers 1
-        mx, my = event.position().x(), event.position().y()
-        W, H = self.width(), self.height()
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Top-right chips
-            if self._paint_mode:
-                # Hit-test using same constants as paintEvent
-                _CHIP_H  = 22; _BTN_W = 24; _BTN_GAP = 4
-                _MAT_W   = 180; _MARGIN = 8
-                _ROW1_Y  = 4;  _ROW2_Y = _ROW1_Y + _CHIP_H + 2
-                rx = W - _MAT_W - _MARGIN   # left edge of chip area
-                # Row 1: material chip click (future: open mat picker)
-                if _ROW1_Y <= my <= _ROW1_Y + _CHIP_H and rx <= mx <= rx + _MAT_W:
-                    _ARW = 22
-                    ws = self._find_workshop()
-                    if ws:
-                        if mx <= rx + _ARW:           # ◀ prev
-                            ws._paint_cycle_mat(-1)
-                        elif mx >= rx + _MAT_W - _ARW: # ▶ next
-                            ws._paint_cycle_mat(+1)
-                        else:                           # mat name chip — open list popup
-                            ws._open_paint_mat_popup()
-                    return
-                # Row 2: tool buttons
-                elif _ROW2_Y <= my <= _ROW2_Y + _CHIP_H:
-                    ws = self._find_workshop()
-                    # Each button occupies _BTN_W + _BTN_GAP
-                    btn_idx = (mx - rx) // (_BTN_W + _BTN_GAP)
-                    if   btn_idx == 0 and ws: ws._set_paint_tool('paint')
-                    elif btn_idx == 1 and ws: ws._set_paint_tool('dropper')
-                    elif btn_idx == 2 and ws: ws._set_paint_tool('fill')
-                    elif btn_idx == 3 and ws: ws._undo_last_action()
-                    elif btn_idx == 4 and ws: ws._save_file()
-                    elif btn_idx == 5 and ws: ws._exit_paint_mode()
-                    self.update(); return
-            else:
-                # Normal: Move [G] toggle
-                if W-70 <= mx <= W-4 and 4 <= my <= 26:
-                    self.toggle_gizmo_mode(); return
-
-            # Paint mode — pick face, apply current tool
-            if self._paint_mode:
-                fi, face = self._pick_face(mx, my)
-                if fi is not None and face is not None:
-                    tool = getattr(self, '_tool_mode', 'paint')
-
-                    if tool == 'dropper':
-                        # Pick material from face → update paint colour + overlay
-                        mat = face.material
-                        picked = mat.material_id if hasattr(mat, 'material_id') else int(mat)
-                        self._paint_material = picked
-                        self._paint_material = picked   # update viewport attr
-                        ws = self._find_workshop()
-                        if ws:
-                            combo = getattr(ws, 'paint_mat_combo', None)
-                            if combo:
-                                for i in range(combo.count()):
-                                    if combo.itemData(i) == picked:
-                                        combo.setCurrentIndex(i)
-                                        break
-                            ws._paint_active_mat = picked
-                            # Sync _paint_mat_idx so ◀▶ arrows start from picked mat
-                            lst = getattr(ws, '_paint_mat_list', [])
-                            mat_ids = [m[0] for m in lst]
-                            if picked in mat_ids:
-                                ws._paint_mat_idx = mat_ids.index(picked)
-                        # Auto-switch back to paint tool after dropper pick
-                        self._tool_mode = 'paint'
-                        self.update()   # refresh overlay with new colour
-                        return
-
-                    elif tool == 'fill':
-                        # Fill all faces that share the same material as clicked face
-                        mat = face.material
-                        src_id = mat.material_id if hasattr(mat, 'material_id') else int(mat)
-                        model = self._model
-                        if model:
-                            ws = self._find_workshop()
-                            if ws:
-                                models = getattr(getattr(ws, 'current_col_file', None), 'models', [])
-                                mi = models.index(model) if model in models else -1
-                                if mi >= 0:
-                                    ws._push_undo(mi, f"Fill material {self._paint_material} from {src_id}")
-                            count = 0
-                            for f2 in model.faces:
-                                m2 = f2.material
-                                cur = m2.material_id if hasattr(m2, 'material_id') else int(m2)
-                                if cur == src_id:
-                                    if hasattr(m2, 'material_id'):
-                                        m2.material_id = self._paint_material
-                                    else:
-                                        f2.material = self._paint_material
-                                    count += 1
-                            if ws:
-                                ws._set_status(f"Filled {count} faces (mat {src_id} → {self._paint_material})")
-
-                    else:  # paint
-                        if hasattr(face, 'material'):
-                            if hasattr(face.material, 'material_id'):
-                                face.material.material_id = self._paint_material
-                            else:
-                                face.material = self._paint_material
-
-                    self._selected_faces = {fi}
-                    if self.on_face_selected:
-                        self.on_face_selected(fi, face)
-                    self.update()
-                return
-
-            # Normal mode — select by current sub-object mode; start drag-select
-            mode = getattr(self, '_select_mode', 'face')
-
-            if mode == 'vertex':
-                vi, _ = self._pick_vertex(mx, my)
-                if vi is not None:
-                    self._apply_selection_click('vertex', vi, event.modifiers())
-                    self._drag_selecting = True
-                    self.setCursor(Qt.CursorShape.CrossCursor)
-                    self.update()
-                    return
-
-            elif mode == 'edge':
-                ek, _ = self._pick_edge(mx, my)
-                if ek is not None:
-                    self._apply_selection_click('edge', ek, event.modifiers())
-                    self._drag_selecting = True
-                    self.setCursor(Qt.CursorShape.CrossCursor)
-                    self.update()
-                    return
-
-            elif mode == 'poly':
-                group, seed_face = self._pick_poly_group(mx, my)
-                if group is not None:
-                    mods = event.modifiers()
-                    if mods & Qt.KeyboardModifier.ControlModifier:
-                        # Ctrl+click: toggle the whole group in/out together
-                        if group & self._selected_faces:
-                            self._selected_faces -= group
-                        else:
-                            self._selected_faces |= group
-                    elif mods & Qt.KeyboardModifier.ShiftModifier:
-                        self._selected_faces |= group
-                    else:
-                        self._selected_faces = set(group)
-                    # No drag-select for poly — one click selects the whole
-                    # shell; dragging would just re-trigger the same group.
-                    if self.on_face_selected:
-                        self.on_face_selected(next(iter(group)), seed_face)
-                    self.update()
-                    return
-
-            else:  # 'face' or default
-                fi, face = self._pick_face(mx, my)
-                if fi is not None:
-                    self._apply_selection_click('face', fi, event.modifiers())
-                    self._drag_selecting = True
-                    self.setCursor(Qt.CursorShape.CrossCursor)
-                    if self.on_face_selected:
-                        self.on_face_selected(fi, face)
-                    self.update()
-                    return
-
-            # Gizmo axis
-            axis = self._hit_gizmo(mx, my)
-            if axis:
-                self._gizmo_drag  = axis
-                self._gizmo_start = event.position()
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
-            else:
-                self._left_drag = event.position()
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif event.button() == Qt.MouseButton.RightButton:
-            # Try to pick a face at click pos; if hit → context menu, else → rotate drag
-            mx2, my2 = event.position().x(), event.position().y()
-            fi2, face2 = self._pick_face(mx2, my2)
-            if fi2 is not None and face2 is not None:
-                # Select the face
-                if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-                    if fi2 not in self._selected_faces:
-                        self._selected_faces = {fi2}
-                else:
-                    self._selected_faces.add(fi2)
-                self.update()
-                self._show_face_context_menu(event.globalPosition().toPoint(), fi2, face2)
-            else:
-                self._right_drag = event.position()
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
-        elif event.button() == Qt.MouseButton.MiddleButton:
-            self._mid_drag = event.position()
-            self.setCursor(Qt.CursorShape.SizeAllCursor)  # rotate
-
-    def mouseMoveEvent(self, event): #vers 1
-        import math
-
-        # - Gizmo drag
-        if self._gizmo_drag and (event.buttons() & Qt.MouseButton.LeftButton):
-            d  = event.position() - self._gizmo_start
-            self._gizmo_start = event.position()
-            axis = self._gizmo_drag
-            scale, _, _ = self._get_scale_origin()
-            ax3 = {'X':(1,0,0),'Y':(0,1,0),'Z':(0,0,1)}[axis]
-            px, py = self._proj(*ax3)
-            screen_len = math.hypot(px, py) or 1.0
-
-            def _vec(obj):  #vers 1
-                """Return the Vector3-like object itself if it has .x/.y/.z"""
-                return obj if (obj and hasattr(obj,'x')) else None
-
-            def _box_pts(box):  #vers 1
-                """Yield the min and max Vector3 points of a box."""
-                mn = getattr(box,'min_point', getattr(box,'min', None))
-                mx = getattr(box,'max_point', getattr(box,'max', None))
-                for pt in [mn, mx]:
-                    if pt and hasattr(pt,'x'): yield pt
-
-            if self._gizmo_mode == 'translate':
-                dot = (d.x()*px + d.y()*py) / screen_len
-                delta = dot / scale
-                if self._model:
-                    sel_verts = self._selected_vertex_indices()
-                    # Move vertices — scoped to selection if one exists,
-                    # otherwise whole-model (preserves prior COL-editing
-                    # behaviour when nothing is sub-object selected)
-                    all_verts = getattr(self._model, 'vertices', [])
-                    if sel_verts:
-                        targets = (all_verts[i] for i in sel_verts if i < len(all_verts))
-                    else:
-                        targets = all_verts
-                    for v in targets:
-                        if   axis=='X': v.x += delta
-                        elif axis=='Y': v.y += delta
-                        else:           v.z += delta
-                    # Move box min/max points
-                    for box in getattr(self._model, 'boxes', []):
-                        for pt in _box_pts(box):
-                            if   axis=='X': pt.x += delta
-                            elif axis=='Y': pt.y += delta
-                            else:           pt.z += delta
-                    # Move sphere centres
-                    for sph in getattr(self._model, 'spheres', []):
-                        c = _vec(sph.center)
-                        if c:
-                            if   axis=='X': c.x += delta
-                            elif axis=='Y': c.y += delta
-                            else:           c.z += delta
-                    # Move bounds centre
-                    bounds = getattr(self._model, 'bounds', None)
-                    if bounds:
-                        for pt in [getattr(bounds,'center',None),
-                                   getattr(bounds,'min',None),
-                                   getattr(bounds,'max',None)]:
-                            if pt and hasattr(pt,'x'):
-                                if   axis=='X': pt.x += delta
-                                elif axis=='Y': pt.y += delta
-                                else:           pt.z += delta
-            else:  # rotate
-                perp_x, perp_y = -py, px
-                deg = (d.x()*perp_x + d.y()*perp_y) / screen_len * 0.8
-                r = math.radians(deg)
-                cos_r, sin_r = math.cos(r), math.sin(r)
-                if self._model:
-                    def _rot_pt(pt):  #vers 1
-                        if not (pt and hasattr(pt,'x')): return
-                        x2,y2,z2 = pt.x, pt.y, pt.z
-                        if axis=='X':
-                            pt.y = y2*cos_r - z2*sin_r
-                            pt.z = y2*sin_r + z2*cos_r
-                        elif axis=='Y':
-                            pt.x = x2*cos_r + z2*sin_r
-                            pt.z = -x2*sin_r + z2*cos_r
-                        else:
-                            pt.x = x2*cos_r - y2*sin_r
-                            pt.y = x2*sin_r + y2*cos_r
-                    sel_verts = self._selected_vertex_indices()
-                    all_verts = getattr(self._model, 'vertices', [])
-                    if sel_verts:
-                        targets = (all_verts[i] for i in sel_verts if i < len(all_verts))
-                    else:
-                        targets = all_verts
-                    # Rotate vertices — scoped to selection if one exists
-                    for v in targets:
-                        _rot_pt(v)
-                    # Rotate box min/max
-                    for box in getattr(self._model, 'boxes', []):
-                        for pt in _box_pts(box):
-                            _rot_pt(pt)
-                    # Rotate sphere centres
-                    for sph in getattr(self._model, 'spheres', []):
-                        _rot_pt(_vec(sph.center))
-                    # Rotate bounds
-                    bounds = getattr(self._model, 'bounds', None)
-                    if bounds:
-                        for attr in ('center','min','max'):
-                            _rot_pt(getattr(bounds, attr, None))
-            self.update()
-            return
-
-        # - Pan (left drag on background)
-        # - Drag-select (LMB held after click — paint-brush selection)
-        if self._drag_selecting and (event.buttons() & Qt.MouseButton.LeftButton):
-            mx2, my2 = event.position().x(), event.position().y()
-            mode = getattr(self, '_select_mode', 'face')
-            shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-
-            if mode == 'vertex':
-                vi, _ = self._pick_vertex(mx2, my2)
-                if vi is not None and vi not in self._selected_verts:
-                    self._selected_verts.add(vi)
-                    self.update()
-
-            elif mode == 'edge':
-                ek, _ = self._pick_edge(mx2, my2)
-                if ek is not None and ek not in self._selected_edges:
-                    self._selected_edges.add(ek)
-                    self.update()
-
-            else:  # 'face' / 'poly' — original paint-aware behaviour preserved
-                fi, face = self._pick_face(mx2, my2)
-                if fi is not None and fi not in self._selected_faces:
-                    if self._paint_mode and not shift_held:
-                        # Paint mode drag without shift: paint face
-                        if hasattr(face, 'material'):
-                            if hasattr(face.material, 'material_id'):
-                                face.material.material_id = self._paint_material
-                            else:
-                                face.material = self._paint_material
-                    # Shift held OR not in paint mode: just add to selection
-                    self._selected_faces.add(fi)
-                    if self.on_face_selected and not shift_held:
-                        self.on_face_selected(fi, face)
-                    self.update()
-
-        elif self._left_drag and (event.buttons() & Qt.MouseButton.LeftButton):
-            d = event.position() - self._left_drag
-            self._pan_x += d.x(); self._pan_y += d.y()
-            self._left_drag = event.position(); self.update()
-
-        # - Free rotate (right drag)
-        if self._right_drag and (event.buttons() & Qt.MouseButton.RightButton):
-            d = event.position() - self._right_drag
-            self._yaw   = (self._yaw + d.x() * 0.4) % 360
-            self._pitch = (self._pitch + d.y() * 0.4) % 360
-            self._right_drag = event.position(); self.update()
-
-        # - Free rotate (middle drag)
-        if self._mid_drag and (event.buttons() & Qt.MouseButton.MiddleButton):
-            d = event.position() - self._mid_drag
-            self._yaw   = (self._yaw + d.x() * 0.4) % 360
-            self._pitch = (self._pitch + d.y() * 0.4) % 360
-            self._mid_drag = event.position(); self.update()
-
-
-    def mouseReleaseEvent(self, event): #vers 1
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._left_drag = None
-            self._gizmo_drag = None
-            self._drag_selecting = False
-        elif event.button() == Qt.MouseButton.RightButton:
-            self._right_drag = None
-        elif event.button() == Qt.MouseButton.MiddleButton:
-            self._mid_drag = None
-        # Restore cursor — cross if still in paint mode, else arrow
-        self.setCursor(
-            Qt.CursorShape.CrossCursor if self._paint_mode
-            else Qt.CursorShape.ArrowCursor
-        )
-
-
-    def resizeEvent(self, event): #vers 1
-        super().resizeEvent(event)
-        ws = self._find_workshop()
-        if ws and hasattr(ws, 'paint_toolbar') and ws.paint_toolbar and ws.paint_toolbar.isVisible():
-            vp = getattr(ws, 'preview_widget', None)
-            if vp: ws.paint_toolbar.setGeometry(0, 0, vp.width(), 34)
-
-
-    def wheelEvent(self, event): #vers 1
-        factor = 1.18 if event.angleDelta().y() > 0 else 1/1.18
-        self._zoom = max(0.02, min(40.0, self._zoom * factor))
-        self.update()
-
-
-    def keyPressEvent(self, event): #vers 1
-        if event.key() == Qt.Key.Key_Escape:
-            if self._paint_mode:
-                self.set_paint_mode(False)
-                # notify workshop via _workshop_ref (reliable; parent() may be a QFrame)
-                ws = self._find_workshop()
-                if ws and hasattr(ws, '_on_paint_mode_exited'):
-                    ws._on_paint_mode_exited()
-            self._selected_faces = set()
-            self.update()
-        elif event.key() == Qt.Key.Key_G: self._set_gizmo('translate')
-        elif event.key() == Qt.Key.Key_F and self._paint_mode:
-            # F = fill selected faces with current paint material
-            ws = self._find_workshop()
-            if ws: ws._apply_to_selected_faces_paint()
-        elif event.key() == Qt.Key.Key_R: self._set_gizmo('rotate')
-        elif event.key() == Qt.Key.Key_F: self.fit_to_window()
-        elif event.key() == Qt.Key.Key_V: self._cycle_render_style()
-        else: super().keyPressEvent(event)
-
-
-    def _cycle_render_style(self): #vers 1
-        modes = ['wireframe','semi','solid','textured']
-        self._render_style = modes[(modes.index(self._render_style)+1) % len(modes)] \
-            if self._render_style in modes else 'semi'
-        self.update()
-
-
-    def contextMenuEvent(self, event): #vers 1
-        from PyQt6.QtWidgets import QMenu
-        m = QMenu(self)
-        m.addAction("Top",       lambda: self._set_angles(0,   0))
-        m.addAction("Front",     lambda: self._set_angles(0,  90))
-        m.addAction("Side",      lambda: self._set_angles(90,  0))
-        m.addAction("Isometric", lambda: self._set_angles(45, 35))
-        m.addSeparator()
-        m.addAction("Reset View",    self.reset_view)
-        m.addAction("Fit to Window", self.fit_to_window)
-        m.addSeparator()
-        m.addAction("Move Gizmo  [G]",   lambda: self._set_gizmo('translate'))
-        m.addAction("Rotate Gizmo [R]",  lambda: self._set_gizmo('rotate'))
-        m.addSeparator()
-        for style,label in [('wireframe','Wireframe [V]'),
-                             ('semi',     'Semi-transparent [V]'),
-                             ('solid',    'Solid [V]'),
-                             ('textured', 'Textured [V]')]:
-            tick = '✓ ' if self._render_style == style else '    '
-            m.addAction(tick+label, lambda s=style: (
-                self.set_render_style(s) if hasattr(self, 'set_render_style')
-                else setattr(self, '_render_style', s) or self.update()))
-        m.exec(event.globalPos())
-
-    def _set_angles(self, yaw, pitch): #vers 1
-        self._yaw, self._pitch = float(yaw), float(pitch); self.update()
-
-
-    # - paint
-    def paintEvent(self, event): #vers 2
-        """Fully self-contained paint — grid, mesh, boxes, spheres, bounds, gizmo, HUD."""
-        if not self.isVisible() or self.width() < 1 or self.height() < 1:
-            return
-        from PyQt6.QtGui import (QPainter, QColor, QFont, QPen, QBrush,
-                                  QPolygonF, QLinearGradient)
-        from PyQt6.QtCore import QPointF, QRectF
-        import math
-
-        p = QPainter(self)
-        if not p.isActive():
-            return
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        W, H = self.width(), self.height()
-        self._set_theme_bg(self.palette())
-        r2, g2, b2 = self._bg_color
-        p.fillRect(self.rect(), QColor(r2, g2, b2))
-
-        if not self._model:
-            p.setPen(self._get_ui_color('viewport_text'))
-            p.setFont(QFont('Arial', 11))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No model selected")
-            p.end()
-            return
-
-        scale, ox, oy = self._get_scale_origin()
-
-        def to_screen(x, y, z): #vers 1
-            px, py = self._proj(x, y, z)
-            return px * scale + ox, py * scale + oy
-
-        def g3(obj): #vers 1
-            if hasattr(obj, 'x'):        return obj.x, obj.y, obj.z
-            if hasattr(obj, 'position'): return obj.position.x, obj.position.y, obj.position.z
-            if obj is None:              return 0.0, 0.0, 0.0
-            return float(obj[0]), float(obj[1]), float(obj[2])
-
-        model   = self._model
-        verts   = getattr(model, 'vertices', [])
-        faces   = getattr(model, 'faces',   [])
-        boxes   = getattr(model, 'boxes',   [])
-        spheres = getattr(model, 'spheres', [])
-        bounds  = getattr(model, 'bounds',  None)
-
-        # - Extent from ALL geometry (verts + boxes + spheres)
-        all_pts = [(v.x, v.y, v.z) for v in verts]
-        for box in boxes:
-            mn = getattr(box,'min_point', getattr(box,'min', None))
-            mx = getattr(box,'max_point', getattr(box,'max', None))
-            if mn: all_pts.append(g3(mn))
-            if mx: all_pts.append(g3(mx))
-        for sph in spheres:
-            cx,cy3,cz = g3(getattr(sph,'center',None))
-            r = getattr(sph,'radius',1.0)
-            all_pts += [(cx+r,cy3,cz),(cx-r,cy3,cz),(cx,cy3+r,cz),(cx,cy3-r,cz)]
-        if bounds:
-            for attr in ('min','max'):
-                pt = getattr(bounds, attr, None)
-                if pt: all_pts.append(g3(pt))
-
-        if all_pts:
-            extent = max(max(abs(c) for pt in all_pts for c in pt), 1.0)
-        else:
-            extent = 5.0
-
-        # - Reference grid (XY plane, Z=0)
-        raw_step = extent / 4.0
-        mag  = 10 ** math.floor(math.log10(max(raw_step, 0.001)))
-        step = round(raw_step / mag) * mag; step = max(step, 0.01)
-        half = math.ceil(extent / step + 1) * step
-        n    = int(half / step)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        for i in range(-n, n + 1):
-            v2 = i * step
-            col = QColor(75, 80, 105) if i == 0 else QColor(50, 55, 72)
-            p.setPen(QPen(col, 1))
-            x0,y0 = to_screen(-half, v2, 0); x1,y1 = to_screen(half, v2, 0)
-            p.drawLine(int(x0), int(y0), int(x1), int(y1))
-            x0,y0 = to_screen(v2, -half, 0); x1,y1 = to_screen(v2, half, 0)
-            p.drawLine(int(x0), int(y0), int(x1), int(y1))
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        # - Material colours
-        # For DFF geometries use actual material colours; fall back to COL palette
-        # _DFFGeometryAdapter exposes .materials from the underlying DFF Geometry
-        _dff_mats = getattr(model, 'materials', [])
-
-        if _dff_mats:
-            def mat_col(mat_id):  #vers 1
-                if 0 <= mat_id < len(_dff_mats):
-                    # DFF Material uses .colour (RGBA dataclass)
-                    mat = _dff_mats[mat_id]
-                    c = getattr(mat, 'colour', None) or getattr(mat, 'color', None)
-                    if c:
-                        return QColor(c.r, c.g, c.b, max(80, c.a) if c.a else 200)
-                return self._get_ui_color('viewport_text')
-        else:
-            try:
-                from apps.components.Model_Editor.depends.col_materials import get_material_qcolor, COLGame
-                _game = COLGame.VC if getattr(getattr(model,'version',None),'value',3)==1 else COLGame.SA
-                def mat_col(mat_id):  #vers 1
-                    c = get_material_qcolor(mat_id, _game)
-                    return c if c else self._get_ui_color('viewport_text')
-            except Exception:
-                def mat_col(mat_id):  #vers 1
-                    return self._get_ui_color('viewport_text')
-
-        # - Mesh faces
-        rs = self._render_style  # 'wireframe' | 'semi' | 'solid' | 'textured'
-
-        # For textured mode: get UV layer and texture cache
-        _geom_obj  = getattr(model, '_geometry', None)
-        _uv_layers = getattr(_geom_obj, 'uv_layers', []) if _geom_obj else []
-        _uv_layer  = _uv_layers[0] if _uv_layers else []
-        _tex_cache = getattr(self, '_tex_cache', {})
-
-        # Hoist imports out of face loop
-        import math as _fmod_math  # used for depth sort
-        from PyQt6.QtGui import QTransform as _QTransform
-        from PyQt6.QtCore import QRectF as _QRectF
-
-        # Helper: build clip polygon for texture face
-        def _face_path(screen_pts):  #vers 1
-            from PyQt6.QtGui import QPainterPath
-            path = QPainterPath()
-            path.moveTo(screen_pts[0])
-            path.lineTo(screen_pts[1])
-            path.lineTo(screen_pts[2])
-            path.closeSubpath()
-            return path
-
-
-        if self._show_mesh and verts and faces:
-            # Painter's algorithm: back-to-front depth sort (cached per yaw bucket)
-            import math as _math
-            _yr = _math.radians(self._yaw)
-            _cy2, _sy2 = _math.cos(_yr), _math.sin(_yr)
-            _yaw_bucket = int(self._yaw) // 5  # re-sort every 5 degrees
-            if (getattr(self,'_sort_cache',None) is None or
-                    getattr(self,'_sort_yaw',None) != _yaw_bucket):
-                def _face_depth(face):  #vers 1
-                    _idx2 = getattr(face,'vertex_indices',None)
-                    if _idx2 is None:
-                        _fa2 = getattr(face,'a',None)
-                        if _fa2 is not None: _idx2=(_fa2,face.b,face.c)
-                    if not _idx2 or len(_idx2)!=3: return 0.0
-                    try:
-                        d=0.0
-                        for _i in _idx2:
-                            _vx,_vy,_ = g3(verts[_i]); d += _vx*_sy2+_vy*_cy2
-                        return d/3.0
-                    except Exception: return 0.0
-                self._sort_cache = sorted(enumerate(faces), key=lambda _t: _face_depth(_t[1]), reverse=True)
-                self._sort_yaw = _yaw_bucket
-            for face_idx, face in self._sort_cache:
-                idx = getattr(face,'vertex_indices',None)
-                if idx is None:
-                    fa = getattr(face,'a',None)
-                    if fa is not None: idx=(fa,face.b,face.c)
-                if not idx or len(idx)!=3: continue
-                try:
-                    pts=[QPointF(*to_screen(*g3(verts[i]))) for i in idx]
-                except (IndexError,AttributeError): continue
-                # Backface detection via 2D cross product
-                _ax=pts[1].x()-pts[0].x(); _ay=pts[1].y()-pts[0].y()
-                _bx=pts[2].x()-pts[0].x(); _by=pts[2].y()-pts[0].y()
-                _is_backface = (_ax*_by - _ay*_bx) > 0
-                # Backface cull — controlled by _backface_cull toggle
-                _do_cull = getattr(self, '_backface_cull', True)
-                if _is_backface and _do_cull and rs in ('solid','textured'):
-                    continue
-                _mat = getattr(face,'material',0)
-                _mat_id = getattr(_mat,'material_id',_mat) if not isinstance(_mat,int) else _mat
-                mc = mat_col(_mat_id)
-                is_selected = (face_idx in self._selected_faces)
-
-                # Lambertian shading — compute per-face shade factor
-                _shade_on = getattr(self, '_shading_enabled', True)
-                try:
-                    if _shade_on:
-                        g3v   = [g3(verts[i]) for i in idx]
-                        _ldir = getattr(self, '_light_dir',     (0.5, 0.5, 0.8))
-                        _lamb = getattr(self, '_light_ambient', 0.30)
-                        _lint = getattr(self, '_light_intensity', 1.0)
-                        _ws   = getattr(self, '_find_workshop', lambda: None)()
-                        # workshop overrides if set via light dialog
-                        if _ws:
-                            _ldir = getattr(_ws, '_vp_light_dir',     _ldir)
-                            _lamb = getattr(_ws, '_vp_light_ambient',  _lamb)
-                            _lint = getattr(_ws, '_vp_light_intensity',_lint)
-                        _shade_raw = self._compute_face_shade(
-                            g3v[0], g3v[1], g3v[2],
-                            ambient=_lamb, light=_ldir)
-                        _shade = min(1.0, _shade_raw * _lint)
-                    else:
-                        _shade = 1.0   # no shading = full brightness
-                except Exception:
-                    _shade = 0.7
-
-                # Darken back faces
-                if _is_backface:
-                    _shade = _shade * 0.35
-
-                if is_selected:
-                    p.setBrush(QBrush(QColor(255, 200, 50, 200)))
-                    p.setPen(QPen(QColor(255, 230, 80), 2))
-                    p.drawPolygon(QPolygonF(pts))
-
-                elif rs == 'textured' and not _is_backface:
-                    # Fast textured path: affine UV blit using drawImage(target, src, src_rect)
-                    # No per-face transform stack — one drawImage call per face.
-                    tex_img = None
-                    mat_obj = _dff_mats[_mat_id] if 0 <= _mat_id < len(_dff_mats) else None
-                    if not getattr(self, '_tex_diag_done', False):
-                        self._tex_diag_done = True
-                        print(f"[RENDER] cache={list(_tex_cache.keys())} "
-                              f"mats={[getattr(m,'texture_name','') for m in _dff_mats]} "
-                              f"uv_len={len(_uv_layer)}")
-                    if mat_obj:
-                        tname = (getattr(mat_obj, 'texture_name', '') or '').strip()
-                        if tname and tname.lower() not in ('', 'null', 'none'):
-                            tex_img = (_tex_cache.get(tname.lower()) or
-                                       _tex_cache.get(tname.lower().split('.')[0]))
-                    if not getattr(self, '_tex_diag2_done', False):
-                        self._tex_diag2_done = True
-                        _has_uv = bool(_uv_layer)
-                        _geom2 = getattr(model, '_geometry', None)
-                        print(f"[TEX2] tex_img={tex_img is not None} uv_layer_len={len(_uv_layer)} "
-                              f"model_type={type(model).__name__} _geometry={_geom2 is not None} "
-                              f"idx={idx} mat_obj={mat_obj is not None} tname={getattr(mat_obj,'texture_name','') if mat_obj else 'N/A'}")
-                    if tex_img and _uv_layer and all(i < len(_uv_layer) for i in idx):
-                        uvs = [_uv_layer[i] for i in idx]
-                        tw, th = tex_img.width(), tex_img.height()
-                        # UV → texture pixel coords, raw (affine handles tiling naturally)
-                        import math as _m
-                        # Skip face if any UV is nan/inf
-                        _uvraw = [(uvs[j].u, uvs[j].v) for j in range(3)]
-                        if any(not _m.isfinite(u) or not _m.isfinite(v) for u,v in _uvraw):
-                            # nan UV — render with material colour instead
-                            _sc = mc; _s3 = _shade
-                            p.setBrush(QBrush(QColor(int(_sc.red()*_s3),int(_sc.green()*_s3),int(_sc.blue()*_s3))))
-                            p.setPen(Qt.PenStyle.NoPen)
-                            p.drawPolygon(QPolygonF(pts))
-                            continue
-                        # RW V=0 is bottom, QImage V=0 is top — flip V
-                        sx0, sy0 = _uvraw[0][0]*tw, _uvraw[0][1]*th
-                        sx1, sy1 = _uvraw[1][0]*tw, _uvraw[1][1]*th
-                        sx2, sy2 = _uvraw[2][0]*tw, _uvraw[2][1]*th
-                        dx0, dy0 = pts[0].x(), pts[0].y()
-                        dx1, dy1 = pts[1].x(), pts[1].y()
-                        dx2, dy2 = pts[2].x(), pts[2].y()
-                        _det = (sx1-sx0)*(sy2-sy0) - (sx2-sx0)*(sy1-sy0)
-                        if abs(_det) > 0.5:
-                            # If det<0 UV triangle is CW — swap v1/v2 to make CCW
-                            if _det < 0:
-                                sx1,sy1,sx2,sy2 = sx2,sy2,sx1,sy1
-                                dx1,dy1,dx2,dy2 = dx2,dy2,dx1,dy1
-                                _det = -_det
-                            _id = 1.0 / _det
-                            _a = ((dx1-dx0)*(sy2-sy0) - (dx2-dx0)*(sy1-sy0)) * _id
-                            _b = ((dx2-dx0)*(sx1-sx0) - (dx1-dx0)*(sx2-sx0)) * _id
-                            _c = ((dy1-dy0)*(sy2-sy0) - (dy2-dy0)*(sy1-sy0)) * _id
-                            _d = ((dy2-dy0)*(sx1-sx0) - (dy1-dy0)*(sx2-sx0)) * _id
-                            _e = dx0 - _a*sx0 - _b*sy0
-                            _f = dy0 - _c*sx0 - _d*sy0
-                            xform = _QTransform(_a, _c, 0, _b, _d, 0, _e, _f, 1)
-                            p.save()
-                            p.setClipPath(_face_path(pts), Qt.ClipOperation.ReplaceClip)
-                            p.setWorldTransform(xform, False)
-                            p.drawImage(_QRectF(0, 0, tw, th), tex_img)
-                            p.restore()
-                        else:
-                            p.save()
-                            p.setClipPath(_face_path(pts), Qt.ClipOperation.ReplaceClip)
-                            p.setBrush(QBrush(mc)); p.setPen(Qt.PenStyle.NoPen)
-                            p.drawPolygon(QPolygonF(pts))
-                            p.restore()
-                        shadow_alpha = int((1.0 - _shade) * 90)
-                        if shadow_alpha > 8:
-                            p.setBrush(QBrush(QColor(0, 0, 0, shadow_alpha)))
-                            p.setPen(Qt.PenStyle.NoPen)
-                            p.drawPolygon(QPolygonF(pts))
-                    else:
-                        # No texture — shaded solid fallback
-                        _sc = mc if mat_obj else QColor(170, 175, 180)
-                        _s3 = _shade
-                        shaded_fb = QColor(
-                            int(_sc.red()   * _s3),
-                            int(_sc.green() * _s3),
-                            int(_sc.blue()  * _s3))
-                        p.setBrush(QBrush(shaded_fb))
-                        p.setPen(QPen(QColor(80, 80, 80, 60), 0.3))
-                        p.drawPolygon(QPolygonF(pts))
-
-                elif rs == 'textured' and _is_backface:
-                    # Back face in textured mode — shaded solid with darkened colour
-                    _s = _shade
-                    shaded_bf = QColor(int(mc.red()*_s), int(mc.green()*_s), int(mc.blue()*_s), 200)
-                    p.setBrush(QBrush(shaded_bf))
-                    p.setPen(QPen(QColor(40,40,40,60), 0.3))
-                    p.drawPolygon(QPolygonF(pts))
-
-                elif rs == 'solid':
-                    # Apply Lambertian shading
-                    _s = _shade
-                    shaded = QColor(
-                        int(mc.red()   * _s),
-                        int(mc.green() * _s),
-                        int(mc.blue()  * _s), mc.alpha())
-                    p.setBrush(QBrush(shaded))
-                    p.setPen(QPen(shaded.darker(120), 0.5))
-                    p.drawPolygon(QPolygonF(pts))
-                elif rs == 'semi':
-                    _s = _shade
-                    fill = QColor(
-                        int(mc.red()   * _s),
-                        int(mc.green() * _s),
-                        int(mc.blue()  * _s), 90)
-                    edge = QColor(
-                        int((mc.red()   * _s)//2 + 60),
-                        int((mc.green() * _s)//2 + 60),
-                        int((mc.blue()  * _s)//2 + 60))
-                    p.setBrush(QBrush(fill))
-                    p.setPen(QPen(edge, 0.5))
-                    p.drawPolygon(QPolygonF(pts))
-                else:  # wireframe
-                    p.setBrush(Qt.BrushStyle.NoBrush)
-                    p.setPen(QPen(QColor(100,180,100),1))
-                    p.drawPolygon(QPolygonF(pts))
-
-        # - Boxes — draw all 12 edges of AABB
-        if self._show_boxes:
-            p.setPen(QPen(QColor(220,180,50),1.5))
-            p.setBrush(QBrush(QColor(220,180,50,30)) if rs!='wireframe' else Qt.BrushStyle.NoBrush)
-            for box in boxes:
-                mn_obj = getattr(box,'min_point',getattr(box,'min',None))
-                mx_obj = getattr(box,'max_point',getattr(box,'max',None))
-                if mn_obj is None or mx_obj is None: continue
-                x0,y0,z0 = g3(mn_obj)
-                x1,y1,z1 = g3(mx_obj)
-                # 8 corners
-                corners=[(xa,ya,za) for xa in(x0,x1) for ya in(y0,y1) for za in(z0,z1)]
-                sc=[to_screen(*c) for c in corners]
-                # 12 edges of the cube
-                edges=[(0,1),(0,2),(0,4),(1,3),(1,5),(2,3),(2,6),(3,7),(4,5),(4,6),(5,7),(6,7)]
-                for a2,b2 in edges:
-                    ax,ay=sc[a2]; bx,by=sc[b2]
-                    p.drawLine(int(ax),int(ay),int(bx),int(by))
-
-        # - Spheres — draw 3 projected rings (equator + 2 meridians)
-        if self._show_spheres:
-            p.setPen(QPen(QColor(80,200,220),1.5))
-            p.setBrush(QBrush(QColor(80,200,220,25)) if rs!='wireframe' else Qt.BrushStyle.NoBrush)
-            N = 48
-            for sph in spheres:
-                cx,cy3,cz = g3(getattr(sph,'center',sph))
-                r = getattr(sph,'radius',1.0)
-                # 3 rings in different planes
-                for t1,t2,t3 in [(1,0,0,),(0,1,0),(0,0,1)]:
-                    # tangent vectors from axis (t1,t2,t3)
-                    if t3: ta,tb = (1,0,0),(0,1,0)
-                    elif t2: ta,tb = (1,0,0),(0,0,1)
-                    else: ta,tb = (0,1,0),(0,0,1)
-                    pts=[]
-                    for i in range(N+1):
-                        a2=2*math.pi*i/N
-                        wx=cx+r*(math.cos(a2)*ta[0]+math.sin(a2)*tb[0])
-                        wy=cy3+r*(math.cos(a2)*ta[1]+math.sin(a2)*tb[1])
-                        wz=cz+r*(math.cos(a2)*ta[2]+math.sin(a2)*tb[2])
-                        pts.append(QPointF(*to_screen(wx,wy,wz)))
-                    for i in range(len(pts)-1):
-                        p.drawLine(pts[i],pts[i+1])
-
-        # - Bounding box (model.bounds)
-        if bounds:
-            mn_obj=getattr(bounds,'min',None); mx_obj=getattr(bounds,'max',None)
-            if mn_obj and mx_obj:
-                x0,y0,z0=g3(mn_obj); x1,y1,z1=g3(mx_obj)
-                corners=[(xa,ya,za) for xa in(x0,x1) for ya in(y0,y1) for za in(z0,z1)]
-                sc=[to_screen(*c) for c in corners]
-                edges=[(0,1),(0,2),(0,4),(1,3),(1,5),(2,3),(2,6),(3,7),(4,5),(4,6),(5,7),(6,7)]
-                p.setPen(QPen(QColor(180,100,220,160),1,Qt.PenStyle.DashLine))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                for a2,b2 in edges:
-                    ax,ay=sc[a2]; bx,by=sc[b2]
-                    p.drawLine(int(ax),int(ay),int(bx),int(by))
-            # Bounding sphere
-            bc=getattr(bounds,'center',None); br=getattr(bounds,'radius',0)
-            if bc and br>0:
-                cx,cy3,cz=g3(bc)
-                ta,tb=(1,0,0),(0,1,0)
-                pts=[]
-                for i in range(49):
-                    a2=2*math.pi*i/48
-                    wx=cx+br*(math.cos(a2)*ta[0]+math.sin(a2)*tb[0])
-                    wy=cy3+br*(math.cos(a2)*ta[1]+math.sin(a2)*tb[1])
-                    wz=cz+br*(math.cos(a2)*ta[2]+math.sin(a2)*tb[2])
-                    pts.append(QPointF(*to_screen(wx,wy,wz)))
-                p.setPen(QPen(QColor(180,100,220,120),1,Qt.PenStyle.DotLine))
-                for i in range(len(pts)-1): p.drawLine(pts[i],pts[i+1])
-
-        # - Gizmo at model centroid
-        if all_pts:
-            cx3=sum(pt[0] for pt in all_pts)/len(all_pts)
-            cy3=sum(pt[1] for pt in all_pts)/len(all_pts)
-            cz3=sum(pt[2] for pt in all_pts)/len(all_pts)
-        else:
-            cx3=cy3=cz3=0.0
-        gx,gy=to_screen(cx3,cy3,cz3)
-        arm=max(45,min(W,H)*0.15)
-        axes=[((1,0,0),QColor(220,60,60),'X'),((0,1,0),QColor(60,200,60),'Y'),((0,0,1),QColor(60,120,220),'Z')]
-        sorted_axes=sorted(axes,key=lambda a:self._proj(*a[0])[1],reverse=True)
-        if self._gizmo_mode=='translate':
-            for (dx,dy,dz),color,label in sorted_axes:
-                px2,py2=self._proj(dx,dy,dz)
-                tx,ty=gx+px2*arm,gy+py2*arm
-                p.setPen(QPen(color,2)); p.drawLine(int(gx),int(gy),int(tx),int(ty))
-                ang=math.atan2(ty-gy,tx-gx); aw,ah=12,6
-                tip=QPointF(tx,ty)
-                lpt=QPointF(tx-aw*math.cos(ang)+ah*math.sin(ang),ty-aw*math.sin(ang)-ah*math.cos(ang))
-                rpt=QPointF(tx-aw*math.cos(ang)-ah*math.sin(ang),ty-aw*math.sin(ang)+ah*math.cos(ang))
-                p.setBrush(QBrush(color)); p.setPen(QPen(color,1))
-                p.drawPolygon(QPolygonF([tip,lpt,rpt]))
-                lx=tx+(9 if tx>=gx else -14); ly=ty+(5 if ty>=gy else -3)
-                p.setFont(QFont('Arial',8,QFont.Weight.Bold)); p.setPen(color)
-                p.drawText(int(lx),int(ly),label)
-        else:
-            N=64
-            rings=[((1,0,0),(0,1,0),(0,0,1),QColor(220,60,60),'X'),
-                   ((0,1,0),(1,0,0),(0,0,1),QColor(60,200,60),'Y'),
-                   ((0,0,1),(1,0,0),(0,1,0),QColor(60,120,220),'Z')]
-            for (_,t1,t2,color,label) in sorted(rings,key=lambda r:self._proj(*r[0])[1],reverse=True):
-                t1x,t1y,t1z=t1; t2x,t2y,t2z=t2
-                pts=[]
-                for i in range(N+1):
-                    a2=2*math.pi*i/N
-                    wx=math.cos(a2)*t1x+math.sin(a2)*t2x
-                    wy=math.cos(a2)*t1y+math.sin(a2)*t2y
-                    wz=math.cos(a2)*t1z+math.sin(a2)*t2z
-                    px2,py2=self._proj(wx,wy,wz)
-                    pts.append(QPointF(gx+px2*arm,gy+py2*arm))
-                p.setPen(QPen(color,2)); p.setBrush(Qt.BrushStyle.NoBrush)
-                for i in range(len(pts)-1): p.drawLine(pts[i],pts[i+1])
-                p45x=math.cos(math.pi/4)*t1x+math.sin(math.pi/4)*t2x
-                p45y=math.cos(math.pi/4)*t1y+math.sin(math.pi/4)*t2y
-                p45z=math.cos(math.pi/4)*t1z+math.sin(math.pi/4)*t2z
-                lp,lq=self._proj(p45x,p45y,p45z)
-                p.setFont(QFont('Arial',8,QFont.Weight.Bold)); p.setPen(color)
-                p.drawText(int(gx+lp*arm+(6 if lp>=0 else -12)),int(gy+lq*arm+(5 if lq>=0 else -3)),label)
-        p.setBrush(QBrush(self._get_ui_color('border'))); p.setPen(QPen(self._get_ui_color('viewport_text'),1))
-        p.drawEllipse(int(gx)-5,int(gy)-5,10,10)
-
-        # - Top-right overlay — normal mode: Move/Rotate + Render chips
-        #                        paint mode: material + tool chips
-        if self._paint_mode:
-            # - Tunable layout constants
-            _CHIP_H   = 26   # height of each chip row  (px)
-            _BTN_W    = 32   # width  of each tool button
-            _BTN_GAP  = 3    # gap between buttons
-            _ICON_SZ  = 18   # SVG icon size inside button
-            _MAT_W    = 200  # width of the material name chip
-            _MARGIN   = 8    # right margin from viewport edge
-            _ROW1_Y   = 4    # y of material chip
-            _ROW2_Y   = _ROW1_Y + _CHIP_H + 2   # y of tool buttons row
-
-            from PyQt6.QtCore import QRect
-            mat_id = self._paint_material
-            # Use cached list if available, else fall back to direct lookup
-            _ws = self._find_workshop()
-            _mat_cache = getattr(_ws, '_paint_mat_list', []) if _ws else []
-            _mat_entry = next((m for m in _mat_cache if m[0] == mat_id), None)
-            if _mat_entry:
-                _, mat_name, hex_col = _mat_entry
-            else:
-                from apps.components.Model_Editor.depends.col_materials import get_material_name, get_material_colour, COLGame
-                mat_name = get_material_name(mat_id, COLGame.SA)
-                hex_col  = get_material_colour(mat_id, COLGame.SA)
-            mc = QColor(f"#{hex_col}")
-
-            # Row 1: [◀] [■ mat swatch | id — name | ▶]
-            _ARW = 22   # arrow button width
-            rx = W - _MAT_W - _MARGIN
-            # ◀ prev button
-            p.setBrush(QBrush(QColor(30,30,50,210))); p.setPen(QPen(QColor(180,120,0),1))
-            p.drawRoundedRect(rx, _ROW1_Y, _ARW, _CHIP_H, 3, 3)
-            p.setPen(QColor(255,180,0)); p.setFont(QFont('Arial',10,QFont.Weight.Bold))
-            p.drawText(rx+5, _ROW1_Y+17, "◀")
-            # material name chip
-            p.setBrush(QBrush(QColor(20,20,40,220))); p.setPen(QPen(QColor(255,140,0),1))
-            p.drawRoundedRect(rx+_ARW+2, _ROW1_Y, _MAT_W-_ARW*2-4, _CHIP_H, 4, 4)
-            p.setBrush(QBrush(mc)); p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(rx+_ARW+6, _ROW1_Y+4, _CHIP_H-8, _CHIP_H-8, 2, 2)
-            p.setPen(QColor(255,200,80)); p.setFont(QFont('Arial',8,QFont.Weight.Bold))
-            p.drawText(rx+_ARW+_CHIP_H+4, _ROW1_Y+17, f"{mat_id} — {mat_name[:20]}")
-            # ▶ next button
-            p.setBrush(QBrush(QColor(30,30,50,210))); p.setPen(QPen(QColor(180,120,0),1))
-            p.drawRoundedRect(rx+_MAT_W-_ARW, _ROW1_Y, _ARW, _CHIP_H, 3, 3)
-            p.setPen(QColor(255,180,0)); p.setFont(QFont('Arial',10,QFont.Weight.Bold))
-            p.drawText(rx+_MAT_W-_ARW+4, _ROW1_Y+17, "▶")
-
-            # Row 2: tool buttons using SVG icons via QIcon.paint()
-            tool = getattr(self, '_tool_mode', 'paint')
-            tx = W - _MAT_W - _MARGIN
-            ws = self._find_workshop()
-            icon_fac = getattr(ws, 'icon_factory', None) if ws else None
-
-            tool_defs = [
-                ('paint',   'paint_icon',   '#ff8c00'),   # orange when active
-                ('dropper', 'dropper_icon', '#4fc3f7'),   # blue
-                ('fill',    'fill_icon',    '#a5d6a7'),   # green
-            ]
-            for t_name, icon_fn, active_col in tool_defs:
-                active = (tool == t_name)
-                bg  = QColor(active_col) if active else QColor(30,30,50,210)
-                bdr = QColor(active_col) if active else QColor(80,90,130)
-                p.setBrush(QBrush(bg)); p.setPen(QPen(bdr, 1))
-                p.drawRoundedRect(tx, _ROW2_Y, _BTN_W, _CHIP_H, 3, 3)
-                # Draw SVG icon centred in button
-                if icon_fac:
-                    icon_col = '#000000' if active else active_col
-                    try:
-                        icon = getattr(icon_fac, icon_fn)(color=icon_col)
-                        icon_x = tx + (_BTN_W - _ICON_SZ) // 2
-                        icon_y = _ROW2_Y + (_CHIP_H - _ICON_SZ) // 2
-                        icon.paint(p, QRect(icon_x, icon_y, _ICON_SZ, _ICON_SZ))
-                    except Exception:
-                        pass
-                tx += _BTN_W + _BTN_GAP
-
-            # Tool name label below row 2 (acts as tooltip)
-            tool_labels = {'paint':'Paint', 'dropper':'Pick', 'fill':'Fill'}
-            p.setPen(QColor(200,200,160,180)); p.setFont(QFont('Arial',7))
-            p.drawText(W - _MAT_W - _MARGIN, _ROW2_Y + _CHIP_H + 10,
-                       f"Tool: {tool_labels.get(tool, tool)}")
-
-            # Undo button
-            p.setBrush(QBrush(QColor(30,30,50,210))); p.setPen(QPen(QColor(80,90,130),1))
-            p.drawRoundedRect(tx, _ROW2_Y, _BTN_W, _CHIP_H, 3, 3)
-            if icon_fac:
-                try:
-                    icon = icon_fac.undo_paint_icon(color='#b0bec5')
-                    icon_x = tx + (_BTN_W - _ICON_SZ)//2
-                    icon_y = _ROW2_Y + (_CHIP_H - _ICON_SZ)//2
-                    icon.paint(p, QRect(icon_x, icon_y, _ICON_SZ, _ICON_SZ))
-                except Exception:
-                    p.setPen(QColor(180,200,255)); p.setFont(QFont('Arial',9))
-                    p.drawText(tx+6, _ROW2_Y+15, "↩")
-            tx += _BTN_W + _BTN_GAP
-
-            # Save button (between undo and exit)
-            p.setBrush(QBrush(QColor(20,50,30,220))); p.setPen(QPen(QColor(80,200,100),1))
-            p.drawRoundedRect(tx, _ROW2_Y, _BTN_W, _CHIP_H, 3, 3)
-            if icon_fac:
-                try:
-                    icon = icon_fac.save_icon(color='#66bb6a')
-                    icon_x = tx + (_BTN_W - _ICON_SZ)//2
-                    icon_y = _ROW2_Y + (_CHIP_H - _ICON_SZ)//2
-                    icon.paint(p, QRect(icon_x, icon_y, _ICON_SZ, _ICON_SZ))
-                except Exception:
-                    p.setPen(QColor(100,220,120)); p.setFont(QFont('Arial',8,QFont.Weight.Bold))
-                    p.drawText(tx+5, _ROW2_Y+15, "S")
-            tx += _BTN_W + _BTN_GAP
-
-            # Exit button (✕)
-            p.setBrush(QBrush(QColor(30,30,50,210))); p.setPen(QPen(QColor(200,80,60),1))
-            p.drawRoundedRect(tx, _ROW2_Y, _BTN_W, _CHIP_H, 3, 3)
-            if icon_fac:
-                try:
-                    icon = icon_fac.close_icon(color='#ef5350')
-                    icon_x = tx + (_BTN_W - _ICON_SZ)//2
-                    icon_y = _ROW2_Y + (_CHIP_H - _ICON_SZ)//2
-                    icon.paint(p, QRect(icon_x, icon_y, _ICON_SZ, _ICON_SZ))
-                except Exception:
-                    p.setPen(QColor(255,100,80)); p.setFont(QFont('Arial',9,QFont.Weight.Bold))
-                    p.drawText(tx+7, _ROW2_Y+15, "x")
-        else:
-            bx,by,bw,bh=W-70,4,66,22
-            p.setBrush(QBrush(QColor(40,44,62))); p.setPen(QPen(QColor(80,90,130),1))
-            p.drawRoundedRect(bx,by,bw,bh,4,4)
-            p.setFont(QFont('Arial',8)); p.setPen(QColor(200,200,220))
-            lbl='↕ Move [G]' if self._gizmo_mode=='translate' else '↻ Rotate [R]'
-            p.drawText(bx+4,by+15,lbl)
-            mode_lbl={'wireframe':'Wire','semi':'Semi','solid':'Solid','textured':'Tex'}.get(rs,'?')
-            mode_col={'wireframe':QColor(100,180,100),'semi':QColor(180,180,100),'solid':QColor(100,140,220),'textured':QColor(220,140,60)}.get(rs,self._get_ui_color('border'))
-            p.setBrush(QBrush(QColor(40,44,62))); p.setPen(QPen(mode_col,1))
-            p.drawRoundedRect(W-70,28,66,18,3,3)
-            p.setPen(mode_col); p.setFont(QFont('Arial',7))
-            p.drawText(W-66,41,f"[V] {mode_lbl}")
-
-        # - HUD
-        p.setFont(QFont('Arial',8)); p.setPen(self._get_ui_color('border'))
-        p.drawText(6,14,getattr(model,'name','') or '')
-        y2=H-54
-        for col_c,txt in [(QColor(100,180,100),f"Mesh  F:{len(faces)} V:{len(verts)}"),
-                          (QColor(220,180,50), f"Boxes  {len(boxes)}"),
-                          (QColor(80,200,220), f"Spheres  {len(spheres)}")]:
-            p.setPen(col_c); p.drawText(6,y2,txt); y2+=14
-        p.setPen(QColor(120,125,140)); p.setFont(QFont('Arial',7))
-        p.drawText(6,H-4,f"Y:{self._yaw:.0f}° P:{self._pitch:.0f}° Z:{self._zoom:.2f}x")
-
-        # Paint mode indicator now shown in paint_toolbar above viewport (not drawn here)
-        p.drawText(W-68,H-4,f"grid {step:.3g}")
-        p.end()
-
-
-    def _apply_to_selected_faces(self): #vers 1
-        vp = self.preview_widget
-        model = self._get_selected_model()
-
-        if not vp or not model:
-            return
-
-        sel = sorted(getattr(vp, '_selected_faces', []))
-        if not sel:
-            return
-
-        mat_id = self._paint_active_mat
-
-        for fi in sel:
-            if fi < len(model.faces):
-                f = model.faces[fi]
-                if isinstance(f.material, int):
-                    f.material = mat_id
-                else:
-                    f.material.material_id = mat_id
-
-        vp.update()
-        self._set_status(f"Applied material {mat_id} to {len(sel)} faces")
-
-
-    def _apply_to_all_faces(self): #vers 1
-        model = self._get_selected_model()
-        if not model:
-            return
-
-        mat_id = self._paint_active_mat
-
-        for f in model.faces:
-            if isinstance(f.material, int):
-                f.material = mat_id
-            else:
-                f.material.material_id = mat_id
-
-        self.preview_widget.update()
-        self._set_status(f"Applied material {mat_id} to all faces")
-
-
-    def _show_face_context_menu(self, global_pos, face_index, face): #vers 1
-        """Right-click context menu for a picked face — material operations."""
-        from PyQt6.QtWidgets import QMenu  # QAction imported at module level
-        from PyQt6.QtGui import QColor, QPixmap, QIcon
-        from PyQt6.QtCore import Qt as _Qt
-
-        ws = self._find_workshop()
-
-        # Resolve material
-        mat = face.material
-        mat_id = mat.material_id if hasattr(mat, 'material_id') else int(mat)
-
-        try:
-            from apps.components.Model_Editor.depends.col_materials import (
-                get_material_name, get_material_colour, COLGame)
-            model = self._model
-            ver = getattr(getattr(model, 'version', None), 'value', 3) if model else 3
-            game = COLGame.VC if ver == 1 else COLGame.SA
-            mat_name = get_material_name(mat_id, game)
-            hex_col  = get_material_colour(mat_id, game)
-        except Exception:
-            mat_name = f"Material {mat_id}"
-            hex_col  = "808080"
-
-        # - Build menu
-        menu = QMenu(self)
-
-        # Header — material info with colour swatch
-        px = QPixmap(14, 14)
-        px.fill(QColor(f"#{hex_col}"))
-        info_act = QAction(QIcon(px),
-            f"  Face {face_index}:  {mat_id} — {mat_name}", self)
-        info_act.setEnabled(False)
-        menu.addAction(info_act)
-        menu.addSeparator()
-
-        # Copy material
-        act_copy = menu.addAction("Copy material")
-        # Paste material (only if clipboard has one)
-        _clip = getattr(ws, '_mat_clipboard', None) if ws else None
-        act_paste = menu.addAction(
-            f"Paste material  ({_clip})" if _clip is not None
-            else "Paste material")
-        act_paste.setEnabled(_clip is not None)
-        menu.addSeparator()
-
-        # Apply to selection
-        n_sel = len(self._selected_faces)
-        sel_label = (f"✓  Apply to {n_sel} selected face(s)"
-                     if n_sel > 1 else "✓  Apply to selection")
-        act_apply_sel = menu.addAction(sel_label)
-        act_apply_sel.setEnabled(n_sel > 1)
-
-        # Clear material on this face (→ material 0)
-        act_clear_face = menu.addAction("✕  Clear material on this face")
-        # Clear material on ALL faces in model
-        model = self._model
-        n_faces = len(getattr(model, 'faces', []))
-        act_clear_all = menu.addAction(
-            f"✕✕  Clear material on all {n_faces} faces")
-
-        menu.addSeparator()
-        # Open full paint editor
-        act_paint = menu.addAction("Paint — open material editor…")
-
-        # - Execute
-        chosen = menu.exec(global_pos)
-        if chosen is None:
-            return
-
-        if chosen == act_copy:
-            if ws:
-                ws._mat_clipboard = mat_id
-                if hasattr(ws, '_set_status'):
-                    ws._set_status(f"Copied material {mat_id} — {mat_name}")
-
-        elif chosen == act_paste and _clip is not None:
-            if ws and model:
-                models = getattr(getattr(ws, 'current_col_file', None), 'models', [])
-                mi = models.index(model) if model in models else -1
-                if mi >= 0 and hasattr(ws, '_push_undo'):
-                    ws._push_undo(mi, f"Paste material {_clip} → face {face_index}")
-            if hasattr(mat, 'material_id'):
-                mat.material_id = _clip
-            else:
-                face.material = _clip
-            self.update()
-            if ws and hasattr(ws, '_set_status'):
-                ws._set_status(f"Pasted material {_clip} → face {face_index}")
-
-        elif chosen == act_apply_sel:
-            if ws and model:
-                models = getattr(getattr(ws, 'current_col_file', None), 'models', [])
-                mi = models.index(model) if model in models else -1
-                if mi >= 0 and hasattr(ws, '_push_undo'):
-                    ws._push_undo(mi, f"Apply material {mat_id} → {n_sel} faces")
-            for fi in self._selected_faces:
-                if fi < len(model.faces):
-                    f2 = model.faces[fi]
-                    m2 = f2.material
-                    if hasattr(m2, 'material_id'):
-                        m2.material_id = mat_id
-                    else:
-                        f2.material = mat_id
-            self.update()
-            if ws and hasattr(ws, '_set_status'):
-                ws._set_status(f"Applied material {mat_id} to {n_sel} faces")
-
-        elif chosen == act_clear_face:
-            if ws and model:
-                models = getattr(getattr(ws, 'current_col_file', None), 'models', [])
-                mi = models.index(model) if model in models else -1
-                if mi >= 0 and hasattr(ws, '_push_undo'):
-                    ws._push_undo(mi, f"Clear material → face {face_index}")
-            if hasattr(mat, 'material_id'):
-                mat.material_id = 0
-            else:
-                face.material = 0
-            self.update()
-            if ws and hasattr(ws, '_set_status'):
-                ws._set_status(f"Cleared material on face {face_index}")
-
-        elif chosen == act_clear_all:
-            if model:
-                if ws:
-                    models = getattr(getattr(ws, 'current_col_file', None), 'models', [])
-                    mi = models.index(model) if model in models else -1
-                    if mi >= 0 and hasattr(ws, '_push_undo'):
-                        ws._push_undo(mi, "Clear all face materials")
-                for f2 in model.faces:
-                    m2 = f2.material
-                    if hasattr(m2, 'material_id'):
-                        m2.material_id = 0
-                    else:
-                        f2.material = 0
-                self.update()
-                if ws and hasattr(ws, '_set_status'):
-                    ws._set_status(f"Cleared material on all {n_faces} faces")
-
-        elif chosen == act_paint:
-            if ws and hasattr(ws, '_open_paint_editor'):
-                ws._open_paint_editor()
-
-    def _find_workshop(self):  #vers 1
-        ref = getattr(self, '_workshop_ref', None)
-        if ref is not None: return ref
-        p = self.parent()
-        while p:
-            if isinstance(p, ModelWorkshop): return p
-            p = p.parent() if callable(getattr(p, 'parent', None)) else None
-        return None
-
-class ModelListWidget(QListWidget): #vers 1
-    """Enhanced model list widget"""
-
-    model_selected = pyqtSignal(int)  # Model index
-    model_context_menu = pyqtSignal(int, object)  # Model index, position
-
-    def __init__(self, parent=None):  #vers 1
-        self.icon_factory = SVGIconFactory()
-        super().__init__(parent)
-        self.current_file = None
-
-        # Enable context menu
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_context_menu)
-
-        # Connect selection
-        self.currentRowChanged.connect(self.on_selection_changed)
-
-
-    def populate_models(self): #vers 1
-        """Populate model list"""
-        self.clear()
-
-        if not self.current_file or not hasattr(self.current_file, 'models'):
-            return
-
-        for i, model in enumerate(self.current_file.models):
-            name = getattr(model, 'name', f'Model_{i}')
-            version = getattr(model, 'version', COLVersion.COL_1)
-
-            # Count collision elements
-            spheres = len(getattr(model, 'spheres', []))
-            boxes = len(getattr(model, 'boxes', []))
-            faces = len(getattr(model, 'faces', []))
-
-            item_text = f"{name} ({version.name} - S:{spheres} B:{boxes} F:{faces})"
-
-            item = QListWidgetItem(item_text)
-            item.setData(Qt.ItemDataRole.UserRole, i)  # Store model index
-            self.addItem(item)
-
-
-    def on_selection_changed(self, row): #vers 1
-        """Handle selection change"""
-        if row >= 0:
-            self.model_selected.emit(row)
-
-
-    def show_context_menu(self, position): #vers 1
-        """Show context menu"""
-        item = self.itemAt(position)
-        if item:
-            model_index = item.data(Qt.ItemDataRole.UserRole)
-            self.model_context_menu.emit(model_index, self.mapToGlobal(position))
 
 
 class _ModelListDelegate(QStyledItemDelegate):
@@ -2845,342 +255,6 @@ class _ModelListDelegate(QStyledItemDelegate):
 
 
 
-class RibbonManagerDialog(QDialog): #vers 1
-    """Ribbon Manager — two-pane dialog for managing QToolBar layout.
-    Left pane: list of toolbars. Right pane: actions in selected toolbar.
-    Drag actions between toolbars to reassign. Create/delete toolbars.
-    Save/load named presets. All changes apply live via QAction
-    removeAction()/addAction() and QMainWindow addToolBar()."""
-
-    ##Methods list -
-    # RibbonManagerDialog.__init__
-    # RibbonManagerDialog._build_ui
-    # RibbonManagerDialog._on_icon_size_changed
-    # RibbonManagerDialog._refresh_toolbar_list
-    # RibbonManagerDialog._refresh_action_list
-    # RibbonManagerDialog._on_toolbar_selected
-    # RibbonManagerDialog._move_action
-    # RibbonManagerDialog._create_toolbar
-    # RibbonManagerDialog._delete_toolbar
-    # RibbonManagerDialog._save_preset
-    # RibbonManagerDialog._load_preset
-    # RibbonManagerDialog._on_accept
-    # RibbonManagerDialog._on_cancel
-
-    def __init__(self, workshop, parent=None): #vers 1
-        super().__init__(parent)
-        self._ws = workshop
-        self._mw = getattr(workshop, '_inner_mw', None)
-        self._selected_tb = None
-        self._cancel_state = None
-        self.setWindowTitle("Ribbon Manager")
-        self.setMinimumSize(660, 440)
-        self._build_ui()
-        if self._ws is not None and hasattr(self._ws, '_get_or_create_hidden_toolbar'):
-            self._ws._get_or_create_hidden_toolbar()
-        self._refresh_toolbar_list()
-        # Snapshot current state for cancel
-        if self._mw:
-            self._cancel_state = self._mw.saveState()
-
-    def _build_ui(self): #vers 2
-        from PyQt6.QtWidgets import (QSplitter, QListWidget, QListWidgetItem,
-            QDialogButtonBox, QAbstractItemView, QSlider)
-        outer = QVBoxLayout(self)
-
-        # Toolbar row
-        tb_row = QHBoxLayout()
-        self._new_btn = QPushButton("+ New Toolbar")
-        self._del_btn = QPushButton("Delete")
-        self._save_preset_btn = QPushButton("Save Preset…")
-        self._load_preset_btn = QPushButton("Load Preset…")
-        for b in (self._new_btn, self._del_btn,
-                  self._save_preset_btn, self._load_preset_btn):
-            tb_row.addWidget(b)
-        tb_row.addStretch()
-        self._new_btn.clicked.connect(self._create_toolbar)
-        self._del_btn.clicked.connect(self._delete_toolbar)
-        self._save_preset_btn.clicked.connect(self._save_preset)
-        self._load_preset_btn.clicked.connect(self._load_preset)
-        outer.addLayout(tb_row)
-
-        # Icon size row - was previously only reachable via toolbar
-        # right-click context menu, easy to miss. Placed here front and
-        # centre since this dialog is the obvious place to look for it.
-        size_row = QHBoxLayout()
-        size_row.addWidget(QLabel("Ribbon Icon Size:"))
-        self._size_slider = QSlider(Qt.Orientation.Horizontal)
-        self._size_slider.setRange(14, 40)
-        self._size_slider.setSingleStep(2)
-        _saved_px = 20
-        try:
-            import json
-            from pathlib import Path
-            _saved_px = json.loads(
-                (_model_workshop_config_dir() / 'model_workshop.json').read_text()
-            ).get('icon_scale', 20)
-        except Exception:
-            pass
-        self._size_slider.setValue(_saved_px)
-        self._size_value_label = QLabel(f"{_saved_px}px")
-        self._size_value_label.setMinimumWidth(36)
-        self._size_slider.valueChanged.connect(self._on_icon_size_changed)
-        size_row.addWidget(self._size_slider, stretch=1)
-        size_row.addWidget(self._size_value_label)
-        outer.addLayout(size_row)
-
-        # Splitter: left = toolbar list, right = action list
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer.addWidget(splitter, stretch=1)
-
-        # Left pane
-        left = QWidget()
-        ll = QVBoxLayout(left); ll.setSpacing(4)
-        ll.addWidget(QLabel("Toolbars"))
-        self._tb_list = QListWidget()
-        self._tb_list.currentRowChanged.connect(self._on_toolbar_selected)
-        ll.addWidget(self._tb_list)
-        splitter.addWidget(left)
-
-        # Right pane
-        right = QWidget()
-        rl = QVBoxLayout(right); rl.setSpacing(4)
-        self._action_label = QLabel("Select a toolbar")
-        rl.addWidget(self._action_label)
-        self._act_list = QListWidget()
-        self._act_list.setDragDropMode(
-            QAbstractItemView.DragDropMode.InternalMove)
-        self._act_list.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self._act_list.setIconSize(QSize(24, 24))
-        self._act_list.model().rowsMoved.connect(self._on_action_reordered)
-        rl.addWidget(self._act_list)
-
-        # Move-to-toolbar button row
-        move_row = QHBoxLayout()
-        move_row.addWidget(QLabel("Move selected to:"))
-        self._move_combo = QComboBox()
-        move_row.addWidget(self._move_combo, stretch=1)
-        self._move_btn = QPushButton("Move →")
-        self._move_btn.clicked.connect(self._move_action)
-        move_row.addWidget(self._move_btn)
-        rl.addLayout(move_row)
-        splitter.addWidget(right)
-        splitter.setSizes([200, 440])
-
-        # OK / Cancel
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok |
-            QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self._on_cancel)
-        outer.addWidget(btns)
-
-    def _on_icon_size_changed(self, px: int): #vers 1
-        """Apply + persist ribbon icon size live, update the px label."""
-        self._size_value_label.setText(f"{px}px")
-        if hasattr(self._ws, '_apply_icon_scale'):
-            self._ws._apply_icon_scale(px)
-
-    def _refresh_toolbar_list(self): #vers 1
-        """Populate left pane with all QToolBar instances."""
-        from PyQt6.QtWidgets import QToolBar, QListWidgetItem
-        self._tb_list.clear()
-        self._move_combo.clear()
-        if not self._mw:
-            return
-        for tb in self._mw.findChildren(QToolBar):
-            name = tb.windowTitle() or tb.objectName()
-            item = QListWidgetItem(name)
-            item.setData(Qt.ItemDataRole.UserRole, tb)
-            # Show first action's icon as preview
-            acts = [a for a in tb.actions() if not a.isSeparator() and a.icon()]
-            if acts:
-                item.setIcon(acts[0].icon())
-            self._tb_list.addItem(item)
-            self._move_combo.addItem(name, tb)
-
-    def _on_toolbar_selected(self, row): #vers 1
-        item = self._tb_list.item(row)
-        if not item:
-            return
-        self._selected_tb = item.data(Qt.ItemDataRole.UserRole)
-        self._refresh_action_list()
-
-    def _refresh_action_list(self): #vers 2
-        """Populate right pane with actions in the selected toolbar.
-
-        Real fix (Aug 21 2026, per Keith: "Ribbon Manager icons in
-        Overlays show as Action, with no icon or name for that
-        function, and the selection group as an Action label") -
-        every real button added to a toolbar via addWidget (Cull/Zon/
-        Occlusion/Garage/Cycle/Undo and others) is genuinely wrapped
-        by Qt in a plain QWidgetAction with no real text/icon/tooltip
-        of its own at all - the actual label and icon live on the
-        wrapped widget itself, not the QAction wrapping it, so act.
-        text()/act.toolTip() were always empty for these, falling
-        through to the "Action" placeholder every real time. Now
-        checks act.defaultWidget() first and pulls the real label/
-        icon/tooltip from there (QToolButton.text()/icon()/toolTip(),
-        or the widget's own windowTitle() as a last-resort fallback)
-        before ever falling back to the generic act.text()/toolTip()
-        path a genuine standalone QAction still uses."""
-        from PyQt6.QtWidgets import QListWidgetItem, QWidgetAction
-        self._act_list.clear()
-        tb = self._selected_tb
-        if not tb:
-            return
-        name = tb.windowTitle() or tb.objectName()
-        self._action_label.setText(f"{name} — actions")
-        for act in tb.actions():
-            if act.isSeparator():
-                item = QListWidgetItem("- separator -")
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
-            else:
-                label, icon, tip = act.text(), act.icon(), act.toolTip()
-                widget = act.defaultWidget() if isinstance(act, QWidgetAction) else None
-                if widget is not None:
-                    label = getattr(widget, 'text', lambda: '')() or label
-                    w_icon = getattr(widget, 'icon', lambda: None)()
-                    if w_icon is not None and not w_icon.isNull():
-                        icon = w_icon
-                    tip = getattr(widget, 'toolTip', lambda: '')() or tip
-                    if not label:
-                        label = widget.windowTitle() or widget.objectName()
-                item = QListWidgetItem(label or tip or "Action")
-                if icon and not icon.isNull():
-                    item.setIcon(icon)
-            item.setData(Qt.ItemDataRole.UserRole, act)
-            self._act_list.addItem(item)
-
-    def _on_action_reordered(self): #vers 1
-        """After drag-reorder in the action list, apply new order to toolbar."""
-        tb = self._selected_tb
-        if not tb:
-            return
-        # Read new order from the list widget
-        new_order = []
-        for i in range(self._act_list.count()):
-            act = self._act_list.item(i).data(Qt.ItemDataRole.UserRole)
-            if act:
-                new_order.append(act)
-        # Remove and re-add all actions in new order
-        for act in list(tb.actions()):
-            tb.removeAction(act)
-        for act in new_order:
-            tb.addAction(act)
-
-    def _move_action(self): #vers 1
-        """Move selected action from current toolbar to the target toolbar."""
-        act_item = self._act_list.currentItem()
-        if not act_item:
-            return
-        act = act_item.data(Qt.ItemDataRole.UserRole)
-        if not act or not self._selected_tb:
-            return
-        target_tb = self._move_combo.currentData()
-        if not target_tb or target_tb is self._selected_tb:
-            return
-        self._selected_tb.removeAction(act)
-        target_tb.addAction(act)
-        self._refresh_action_list()
-
-    def _create_toolbar(self): #vers 1
-        """Create a new empty QToolBar and add it to the inner QMainWindow."""
-        from PyQt6.QtWidgets import QInputDialog, QToolBar
-        if not self._mw:
-            return
-        name, ok = QInputDialog.getText(self, "New Toolbar", "Toolbar name:")
-        if not ok or not name.strip():
-            return
-        name = name.strip()
-        tb = QToolBar(name, self._mw)
-        tb.setObjectName(name)
-        tb.setMovable(True)
-        tb.setFloatable(True)
-        tb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        tb.customContextMenuRequested.connect(
-            lambda pos, t=tb: self._ws._toolbar_context_menu(t, pos))
-        self._mw.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
-        self._refresh_toolbar_list()
-
-    def _delete_toolbar(self): #vers 1
-        """Delete the selected toolbar, moving its actions to Unassigned."""
-        from PyQt6.QtWidgets import QMessageBox
-        tb = self._selected_tb
-        if not tb:
-            return
-        n_acts = len([a for a in tb.actions() if not a.isSeparator()])
-        if n_acts > 0:
-            ans = QMessageBox.question(
-                self, "Delete Toolbar",
-                f"'{tb.windowTitle()}' has {n_acts} action(s).\n"
-                "They will be removed from all toolbars.\nContinue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
-            if ans != QMessageBox.StandardButton.Yes:
-                return
-        self._mw.removeToolBar(tb)
-        tb.deleteLater()
-        self._selected_tb = None
-        self._refresh_toolbar_list()
-        self._act_list.clear()
-
-    def _save_preset(self): #vers 1
-        """Save current toolbar layout as a named preset."""
-        from PyQt6.QtWidgets import QInputDialog
-        import json
-        from pathlib import Path
-        if not self._mw:
-            return
-        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
-        if not ok or not name.strip():
-            return
-        path = _model_workshop_config_dir() / 'model_workshop.json'
-        try:
-            data = json.loads(path.read_text())
-        except Exception:
-            data = {}
-        presets = data.setdefault('toolbar_presets', {})
-        presets[name.strip()] = self._mw.saveState().toHex().data().decode()
-        path.write_text(json.dumps(data, indent=2))
-        self._ws._set_status(f"Preset '{name.strip()}' saved")
-
-    def _load_preset(self): #vers 1
-        """Load a named preset."""
-        from PyQt6.QtWidgets import QInputDialog
-        from PyQt6.QtCore import QByteArray
-        import json
-        from pathlib import Path
-        if not self._mw:
-            return
-        path = _model_workshop_config_dir() / 'model_workshop.json'
-        try:
-            data = json.loads(path.read_text())
-        except Exception:
-            data = {}
-        presets = data.get('toolbar_presets', {})
-        if not presets:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Load Preset", "No saved presets found.")
-            return
-        name, ok = QInputDialog.getItem(
-            self, "Load Preset", "Select preset:",
-            list(presets.keys()), editable=False)
-        if not ok:
-            return
-        self._mw.restoreState(QByteArray.fromHex(presets[name].encode()))
-        self._refresh_toolbar_list()
-        self._ws._set_status(f"Preset '{name}' loaded")
-
-    def _on_accept(self): #vers 1
-        """Apply and save state."""
-        self._ws._save_toolbar_state()
-        self.accept()
-
-    def _on_cancel(self): #vers 1
-        """Restore pre-dialog state."""
-        if self._cancel_state and self._mw:
-            self._mw.restoreState(self._cancel_state)
-        self.reject()
 
 
 def _key_display_name(key: int, is_numpad: bool) -> str: #vers 1
@@ -3237,7 +311,7 @@ class _KeyCaptureButton(QPushButton):
         return {'key': self._key, 'numpad': self._is_numpad}
 
 
-def _model_workshop_config_dir() -> Path: #vers 2
+def _model_workshop_config_dir() -> Path: #vers 3
     """The one, shared, correct location for every Map/Model Workshop
     config file in this app - a dedicated config/ subfolder alongside
     this app's own depends/ folder (Aug 20 2026)"""
@@ -3254,7 +328,7 @@ def _model_workshop_config_dir() -> Path: #vers 2
     except Exception as e:
         print(f"[Map/Model Workshop config] App folder not writable "
               f"({e}), falling back to ~/.config/imgfactory")
-        fallback = Path.home() / '.config' / 'imgfactory'
+        fallback = get_user_config_dir()
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
@@ -3298,7 +372,7 @@ class MapSettings(QObject):
 
         'recent_dat_files':  [],
         # Auto-load the most recently used game world on startup (Aug
-        # 20 2026, per Keith's own explicit "option 2" choice: "build
+        # 20 2026  own explicit "option 2" choice: "build
         # auto-restore last world on startup, so preload can fire
         # without a manual reload each time") - default on since he
         # chose it, but toggleable since it's a real startup-behaviour
@@ -3306,7 +380,7 @@ class MapSettings(QObject):
         # time the tool opens).
         'auto_load_last_world': True,
         # Auto-dismiss the load summary dialog (Aug 20 2026, per
-        # Keith: "that dat window, countdown from 10, then
+        #  : "that dat window, countdown from 10, then
         # automatically press ok, also show the preloaded files in
         # that dialog window") - off by default, since a popup
         # closing itself is a bigger behaviour change to opt into
@@ -3340,44 +414,48 @@ class MapSettings(QObject):
         'water_tile_size': 256,
         'water_hide_outside_map': False,
         'preload_saved_files': [],
-        # Water2's own style toggle (Aug 20 2026, per Keith: "I like
+        # Water2's own style toggle (Aug 20 2026,  "I like
         # the blue, so we can keep it, or have an option to use the
         # water texture, either from the game or the tex/ file from
-        # img factory") - off by default (Keith's own stated
+        # img factory") - off by default (my own stated
         # preference), independent of whether a texture happens to be
         # preloaded, so switching back and forth doesn't need re-
         # preloading each time.
         'water2_use_texture': False,
         # Real, manually-chosen custom water texture path (Aug 20
-        # 2026, per Keith: "the option settings path for using other
+        # 2026,  "the option settings path for using other
         # water textures") - empty means "no custom override, try the
         # loaded game's own particle.txd first, then this app's own
         # tex/ folder asset if preloaded via that route instead".
         'water2_custom_texture_path': '',
-        # Height/transparency adjustments (Aug 20 2026, per Keith:
+        # Height/transparency adjustments (Aug 20 2026, .per:
         # "The water needs to be moved up and have transparency
         # settings, but I'm not sure by how much").
         'water2_height_offset': 0.0,
         'water2_alpha': 0.45,
-        # X/Y offsets (Aug 20 2026, per Keith: "6 squares offset on
+        # Viewport gauge overlay: 'left', 'right' or 'off'
+        'viewport_gauge_side': 'right',
+        # X/Y offsets (Aug 20 2026,  "6 squares offset on
         # the larger grid, or 14 on the smaller grid") - matches
         # water_workshop.py's own "World coordinate offset" X/Y/Z
         # feature; per-file, not assumed to be the same for every VC
         # install.
         'water2_x_offset': 0.0,
         'water2_y_offset': 0.0,
-        # VC-only gate (Aug 20 2026, per Keith: "offset should only be
+        # VC-only gate (Aug 20 2026,  "offset should only be
         # for VC, so we need a toggle to effect VC waterpro.dat only")
         'water2_offset_vc_only': True,
+        # Radar/water fix mode: 'vc' VC only, 'all', 'off'
+        'water2_offset_mode': '',
 
-        # IPL Controls display style (Aug 20 2026, per Keith: "we
+        # IPL Controls display style (Aug 20 2026,  "we
         # could add a toggle in settings, Show IPL Controls = as
         # [Buttons] or ribbon icons") - off (buttons/text) by default,
         # since not every overlay toggle button has real icon artwork
         # yet.
         'ipl_controls_icon_only': False,
 
-        # Viewport camera state (Aug 20 2026, per Keith: "remember the
+        # Viewport camera state (Aug 20 2026,  "remember the
         # zoom settings, and view location when app is closed") - None
         # means "never saved yet, use the viewport's own built-in
         # default" rather than a real 0.0/wrong guessed default.
@@ -3386,6 +464,31 @@ class MapSettings(QObject):
         'viewport_pan_y': None,
         'viewport_yaw': None,
         'viewport_pitch': None,
+
+        # Camera angle when centring on a selected instance (Sep 5
+        # 2026,  "when selecting a model in map workshop,
+        # can we change the camera view, have a setting, view from 0,
+        # +200 so we dont view the model from the bottom, we see it
+        # from the top instead") - off by default since it's a new
+        # behaviour change to opt into; _center_on_instance leaves the
+        # camera's current yaw/pitch alone otherwise, which can leave
+        # it looking up from underneath the model. When on, selecting
+        # an instance also resets pitch to a from-above angle and
+        # dist to focus_from_above_dist.
+        'focus_from_above': False,
+        'focus_from_above_dist': 200.0,
+
+        # IPL Object Editor always-on-top (Sep 5 2026,  "the
+        # IPL file editor should stay on top, with a settings toggle
+        # option") - off by default, matching every other new opt-in
+        # behaviour toggle added this session.
+        'ipl_editor_always_on_top': False,
+
+        # IPL stems to parse as VC layout (Sep 5 2026,  "LC,
+        # MLL, VC are still in VC format... a loading toggle to adjust
+        # ipl loading patterns") - comma-separated, no extension, e.g.
+        # "lc,mll,vc" - empty by default (no change to normal loading).
+        'vc_layout_ipl_stems': '',
 
         # distinct from paths' red.
         'cull_box_color': (255, 217, 51),
@@ -3419,10 +522,17 @@ class MapSettings(QObject):
         'show_load_options_dialog': True,
         # Verbose per-model loading dialog (Aug 1 2026)
         'show_verbose_loading_dialog': False,
+        # Parallel model/texture parsing (Sep 25 2026); 0 = auto (cores - 2)
+        'load_workers': 0,
         # Texture downscale (Aug 1 2026)
         'texture_downscale_enabled': False,
         'texture_downscale_threshold': 512,
         'texture_downscale_target': 256,
+        # Per-format texture limits (Oct 12 2026); RW uses texture_downscale_*
+        'tex_limit_iv_on': False, 'tex_limit_iv_over': 256, 'tex_limit_iv_to': 128,
+        'tex_limit_stories_on': False, 'tex_limit_stories_over': 512, 'tex_limit_stories_to': 256,
+        'tex_limit_nif_on': False, 'tex_limit_nif_over': 512, 'tex_limit_nif_to': 256,
+        'tex_keep_dxt': True,   # DXT kept compressed, GPU decodes
         'default_width':     320,
         'default_height':    200,
         'retro_palette':     'Amiga AGA WB',
@@ -3533,8 +643,25 @@ class MapSettings(QObject):
         'radar_tiles_output_dir': '',
         'radar_tiles_pack_txd':   True,
         'radar_tiles_copy_to_assists': True,
-        # Real bug fixed (Aug 20 2026)
+        #  bug fixed (Aug 20 2026)
         'radar_tiles_show_grid':  False,
+        # Save points - snapshots of unsaved map edits (Sep 23 2026)
+        'savepoints_enabled':      False,
+        'savepoints_interval_min': 10,
+        'savepoints_keep':         20,
+        # Map Checks limits (None = built-in default per game) (Sep 23 2026)
+        'limit_gta3_model_infos': None, 'limit_gta3_buildings': None,
+        'limit_vc_model_infos':   None, 'limit_vc_buildings':   None,
+        'limit_sa_model_infos':   None, 'limit_sa_buildings':   None,
+        'limit_sol_model_infos':  None, 'limit_sol_buildings':  None,
+        # Camera bookmarks per world: {world key: {slot: [pan_x, pan_y, dist, yaw, pitch, name]}}
+        'camera_bookmarks': {},
+        # Game controller (Sep 24 2026)
+        'gamepad_enabled':  False,
+        'gamepad_deadzone': 0.15,
+        # Prelight bake (Sep 24 2026)
+        'prelight_ambient': (90, 90, 100), 'prelight_diffuse': (200, 190, 170),
+        'prelight_azimuth': 135.0, 'prelight_elevation': 45.0, 'prelight_strength': 1.0,
         # The real "other grid options" this same comment block above
         # already flagged as coming later (Aug 20 2026)
         'grid_type': 'lines',
@@ -3551,27 +678,14 @@ class MapSettings(QObject):
 
     _instance = None
 
-    def __new__(cls): #vers 1
-        """Singleton (Aug 19 2026)"""
+    @classmethod
+    def shared(cls): #vers 1
+        """Singleton access; overriding __new__ on QObject segfaults (PyQt 6.11)."""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._map_settings_initialized = False
+            cls._instance = cls()
         return cls._instance
 
-    def __init__(self): #vers 3
-        if self._map_settings_initialized:
-            # Already the shared instance, already fully set up from
-            # an earlier ModelWorkshop's own construction - __init__
-            # still runs every time MapSettings() is called (that's
-            # normal Python behaviour, __new__ returning the same
-            # object doesn't skip __init__), but doing all of this
-            # again would re-run super().__init__() on an already-
-            # initialised QObject and reset the save timer/reload from
-            # disk for no reason - this guard is what actually makes
-            # __new__'s own singleton meaningful rather than just
-            # returning the same object with its real state clobbered
-            # right back to fresh-from-disk on every subsequent call.
-            return
+    def __init__(self): #vers 5
         super().__init__()
         # App-folder-relative, not ~/.config (Aug 20 2026)
         self._path = _model_workshop_config_dir() / 'map_workshop.json'
@@ -3581,7 +695,6 @@ class MapSettings(QObject):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._save_now)
-        self._map_settings_initialized = True
 
     def _load(self): #vers 2
         """Load previously-saved settings from disk (Aug 20 2026)"""
@@ -3624,564 +737,131 @@ class MapSettings(QObject):
             self._save_timer.start(800)
 
 
-class MapSettingsDialog(QDialog):
-    """Settings dialog for Map Workshop — does NOT touch global AppSettings."""
-
-    def __init__(self, map_settings: MapSettings, parent=None): #vers 4
-        super().__init__(parent)
-        self.s = map_settings
-        self._workshop = parent   # MapWorkshop instance - gives access to _WIDGET_REGISTRY
-        self.setWindowTitle(App_name + " - Settings")
-        self.setMinimumWidth(380)
-        self.setModal(True)
-
-        root = QVBoxLayout(self)
-        tabs = QTabWidget()
-
-        # - Canvas tab
-        canvas_tab = QWidget()
-        cl = QFormLayout(canvas_tab)
-        cl.setSpacing(8)
-
-        self._w_spin = QSpinBox(); self._w_spin.setRange(8, 4096)
-        self._w_spin.setValue(self.s.get('default_width'))
-        cl.addRow("Default width:", self._w_spin)
-
-        self._h_spin = QSpinBox(); self._h_spin.setRange(8, 4096)
-        self._h_spin.setValue(self.s.get('default_height'))
-        cl.addRow("Default height:", self._h_spin)
-
-        self._zoom_spin = QSpinBox(); self._zoom_spin.setRange(1, 64)
-        self._zoom_spin.setValue(self.s.get('default_zoom'))
-        cl.addRow("Default zoom:", self._zoom_spin)
-
-        self._undo_spin = QSpinBox(); self._undo_spin.setRange(4, 128)
-        self._undo_spin.setValue(self.s.get('undo_levels'))
-        cl.addRow("Undo levels:", self._undo_spin)
-
-        tabs.addTab(canvas_tab, "Canvas")
-
-        # - Ribbons tab (icon size / padding per orientation, opacity)
-        ribbons_tab = QWidget()
-        rl = QFormLayout(ribbons_tab)
-
-        ribbon_mgr_btn = QPushButton("Ribbon Manager…")
-        ribbon_mgr_btn.setToolTip("Move tools between ribbons, save/load layout presets")
-        if self._workshop is not None:
-            ribbon_mgr_btn.clicked.connect(self._workshop.open_ribbon_manager)
-        rl.addRow(ribbon_mgr_btn)
-        rl.addRow(QLabel(""))
-
-        rl.addRow(QLabel("—  Vertical  (docked left/right)  —"))
-        self._ribbon_icon_vert_spin = QSpinBox()
-        self._ribbon_icon_vert_spin.setRange(12, 64)
-        self._ribbon_icon_vert_spin.setValue(self.s.get('ribbon_icon_size_vert'))
-        rl.addRow("Icon size:", self._ribbon_icon_vert_spin)
-        self._ribbon_pad_vert_spin = QSpinBox()
-        self._ribbon_pad_vert_spin.setRange(0, 20)
-        self._ribbon_pad_vert_spin.setValue(self.s.get('ribbon_padding_vert'))
-        self._ribbon_pad_vert_spin.setToolTip("Gap between buttons")
-        rl.addRow("Button spacing:", self._ribbon_pad_vert_spin)
-        self._ribbon_btn_pad_vert_spin = QSpinBox()
-        self._ribbon_btn_pad_vert_spin.setRange(0, 20)
-        self._ribbon_btn_pad_vert_spin.setValue(self.s.get('ribbon_button_padding_vert'))
-        self._ribbon_btn_pad_vert_spin.setToolTip("Gap between the icon and the button's own edge")
-        rl.addRow("Button edge padding:", self._ribbon_btn_pad_vert_spin)
-
-        rl.addRow(QLabel("—  Horizontal  (docked top/bottom)  —"))
-        self._ribbon_icon_horz_spin = QSpinBox()
-        self._ribbon_icon_horz_spin.setRange(12, 64)
-        self._ribbon_icon_horz_spin.setValue(self.s.get('ribbon_icon_size_horz'))
-        rl.addRow("Icon size:", self._ribbon_icon_horz_spin)
-        self._ribbon_pad_horz_spin = QSpinBox()
-        self._ribbon_pad_horz_spin.setRange(0, 20)
-        self._ribbon_pad_horz_spin.setValue(self.s.get('ribbon_padding_horz'))
-        self._ribbon_pad_horz_spin.setToolTip("Gap between buttons")
-        rl.addRow("Button spacing:", self._ribbon_pad_horz_spin)
-        self._ribbon_btn_pad_horz_spin = QSpinBox()
-        self._ribbon_btn_pad_horz_spin.setRange(0, 20)
-        self._ribbon_btn_pad_horz_spin.setValue(self.s.get('ribbon_button_padding_horz'))
-        self._ribbon_btn_pad_horz_spin.setToolTip("Gap between the icon and the button's own edge")
-        rl.addRow("Button edge padding:", self._ribbon_btn_pad_horz_spin)
-
-        rl.addRow(QLabel("—  Appearance  —"))
-        self._ribbon_opacity_spin = QSpinBox()
-        self._ribbon_opacity_spin.setRange(10, 100)
-        self._ribbon_opacity_spin.setSuffix(" %")
-        self._ribbon_opacity_spin.setValue(self.s.get('ribbon_opacity'))
-        self._ribbon_opacity_spin.setToolTip("Ribbon background translucency - "
-                                             "lower = more see-through")
-        rl.addRow("Opacity:", self._ribbon_opacity_spin)
-
-        tabs.addTab(ribbons_tab, "Ribbons")
-
-        # - Interface tab
-        ui_tab = QWidget()
-        ul = QFormLayout(ui_tab)
-        ul.setSpacing(8)
-
-        self._bitmap_chk = QCheckBox()
-        self._bitmap_chk.setChecked(self.s.get('show_bitmap_list'))
-        ul.addRow("Show bitmap list panel:", self._bitmap_chk)
-
-        self._statusbar_chk = QCheckBox()
-        self._statusbar_chk.setChecked(self.s.get('show_statusbar'))
-        ul.addRow("Show status bar:", self._statusbar_chk)
-
-        self._font_size_spin = QSpinBox(); self._font_size_spin.setRange(7, 18)
-        self._font_size_spin.setValue(self.s.get('ui_font_size'))
-        ul.addRow("UI font size:", self._font_size_spin)
-
-        self._icon_size_spin = QSpinBox(); self._icon_size_spin.setRange(16, 64)
-        self._icon_size_spin.setValue(self.s.get('tool_icon_size'))
-        ul.addRow("Tool icon size (px):", self._icon_size_spin)
-
-        self._icon_color_combo = QComboBox()
-        self._icon_color_combo.addItems(['color', 'white', 'dark'])
-        idx = {'color': 0, 'white': 1, 'dark': 2}.get(
-            self.s.get('tool_icon_color'), 0)
-        self._icon_color_combo.setCurrentIndex(idx)
-        ul.addRow("Tool icon colour:", self._icon_color_combo)
-
-        self._cols_combo = QComboBox()
-        self._cols_combo.addItems(['3 columns', '4 columns', '5 columns', '6 columns'])
-        col_idx = {3: 0, 4: 1, 5: 2, 6: 3}.get(self.s.get('tool_columns'), 0)
-        self._cols_combo.setCurrentIndex(col_idx)
-        ul.addRow("Gadget columns:", self._cols_combo)
-
-        tabs.addTab(ui_tab, "Interface")
-
-        # - Widgets tab (enable/disable each dock) - generated from
-        # MapWorkshop._WIDGET_REGISTRY rather than one hardcoded checkbox
-        # per widget, so adding a new widget to the registry (e.g. an
-        # alternative colour-widget implementation) automatically gets a
-        # toggle here too, with no dialog code changes needed.
-        widgets_tab = QWidget()
-        wl = QFormLayout(widgets_tab)
-        wl.setSpacing(8)
-
-        self._widget_chks = {}   # key -> QCheckBox, for generic save logic
-        registry = getattr(self._workshop, '_WIDGET_REGISTRY', [])
-        for entry in registry:
-            # Entries with enabled_setting=None (Bitmaps) have their
-            # visibility combined with another setting elsewhere, but
-            # still get a checkbox here using the conventional settings
-            # key, which already exists.
-            setting_key = entry.get('enabled_setting') or f"widget_{entry['key']}_enabled"
-            chk = QCheckBox()
-            chk.setChecked(self.s.get(setting_key))
-            wl.addRow(f"{entry.get('label', entry['key'])}:", chk)
-            self._widget_chks[entry['key']] = chk
-
-        tabs.addTab(widgets_tab, "Widgets")
-
-        # - Gadgets tab
-        gadgets_tab = QWidget()
-        gl = QVBoxLayout(gadgets_tab)
-        gl.setSpacing(4)
-        gl.addWidget(QLabel("Click to toggle tool visibility (highlighted = visible):"))
-        hidden = self.s.get('hidden_tools') or []
-        icon_sz = self.s.get('tool_icon_size')
-        btn_sz  = max(26, icon_sz + 2)  # min 26px so labels stay readable
-        self._gadget_chks = {}
-        TOOL_LABELS = [
-            ('pencil','Pencil'), ('eraser','Eraser'), ('fill','Fill'),
-            ('spray','Spray'), ('picker','Picker'), ('curve','Curve'),
-            ('line','Line'), ('rect','Rectangle'), ('circle','Circle'),
-            ('triangle','Triangle'), ('polygon','Polygon'), ('star','Star'),
-            ('select','Select'), ('lasso','Lasso'), ('zoom','Zoom'),
-            ('text','Text'), ('crop','Crop'), ('resize','Resize'),
-            ('dither','Dither'), ('symmetry','Symmetry'),
-        ]
-        grid_w = QWidget()
-        grid_l = QGridLayout(grid_w)
-        grid_l.setSpacing(4)
-        grid_l.setContentsMargins(0, 0, 0, 0)
-        cols = 4
-        for idx, (tool_id, label) in enumerate(TOOL_LABELS):
-            btn = QPushButton()
-            btn.setCheckable(True)
-            btn.setChecked(tool_id not in hidden)
-            btn.setFixedSize(btn_sz, btn_sz + 14)
-            btn.setToolTip(label)
-            # Use parent workshop's icon colour if available
-            _ws  = parent if hasattr(parent, '_get_icon_color') else None
-            _col = _ws._get_icon_color() if _ws else ''
-            _tbg = ''
-            if _ws and _ws.app_settings:
-                _tc = _ws.app_settings.get_theme_colors() or {}
-                _tbg = _tc.get('gadgetbar_bg', _tc.get('toolbar_bg', ''))
-            # _load_tool_icon was never defined anywhere in this file
-            # (Aug 1 2026, found while testing the new Loading tab
-            # below) - the whole Settings dialog crashed on open
-            # before even reaching any other tab, since Gadgets is
-            # built first. Leftover from the paint-tool legacy this
-            # file inherited (text/crop/dither/symmetry are paint
-            # tools, not map-editing ones) - properly rebuilding this
-            # tab is out of scope here, but a plain fallback icon
-            # means the dialog opens instead of crashing outright.
-            try:
-                ico = _load_tool_icon(tool_id, icon_sz, tile_bg=_tbg, icon_col=_col)
-            except NameError:
-                ico = QIcon()
-            btn.setIcon(ico)
-            btn.setIconSize(QSize(icon_sz, icon_sz))
-            lbl_short = label[:6]
-            btn.setText(lbl_short)
-            # Theme-aware stylesheet — no hardcoded colours
-            acc = '#4a8a4a'
-            if _ws and _ws.app_settings:
-                _tc2 = _ws.app_settings.get_theme_colors() or {}
-                acc  = _tc2.get('accent_primary', acc)
-            btn.setStyleSheet(
-                f"QPushButton {{ font-size: 8px; color: palette(mid); "
-                f"background: palette(base); border: 1px solid palette(mid); "
-                f"padding-top: 2px; }} "
-                f"QPushButton:checked {{ background: {acc}; "
-                f"border: 1px solid palette(highlight); }}"
-            )
-            btn.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-            grid_l.addWidget(btn, idx // cols, idx % cols)
-            self._gadget_chks[tool_id] = btn
-        gl.addWidget(grid_w)
-        gl.addStretch()
-
-        # - Menu tab  
-        menu_tab = QWidget()
-        ml = QFormLayout(menu_tab)
-        ml.setSpacing(8)
-
-        self._menu_style_combo = QComboBox()
-        self._menu_style_combo.addItems(['topbar', 'dropdown'])
-        self._menu_style_combo.setCurrentText(self.s.get('menu_style'))
-        ml.addRow("Menu orientation:", self._menu_style_combo)
-
-        self._menu_bar_height_spin = QSpinBox()
-        self._menu_bar_height_spin.setRange(16, 40)
-        self._menu_bar_height_spin.setValue(self.s.get('menu_bar_height'))
-        self._menu_bar_height_spin.setSuffix(" px")
-        ml.addRow("Topbar height:", self._menu_bar_height_spin)
-
-        self._menu_bar_font_spin = QSpinBox()
-        self._menu_bar_font_spin.setRange(7, 16)
-        self._menu_bar_font_spin.setValue(self.s.get('menu_bar_font_size'))
-        self._menu_bar_font_spin.setSuffix(" pt")
-        ml.addRow("Topbar font size:", self._menu_bar_font_spin)
-
-        self._menu_dropdown_font_spin = QSpinBox()
-        self._menu_dropdown_font_spin.setRange(7, 16)
-        self._menu_dropdown_font_spin.setValue(self.s.get('menu_dropdown_font_size'))
-        self._menu_dropdown_font_spin.setSuffix(" pt")
-        ml.addRow("Dropdown font size:", self._menu_dropdown_font_spin)
-
-        tabs.addTab(menu_tab, "Menu")
-
-        tabs.addTab(gadgets_tab, "Gadgets")
-
-        # - Loading tab (Aug 1 2026)
-        loading_tab = QWidget()
-        ld_lay = QVBoxLayout(loading_tab)
-        ld_form = QFormLayout()
-        ld_form.setSpacing(8)
-
-        self._load_streams_chk = QCheckBox("Load Text plus Binary IPL set")
-        self._load_streams_chk.setChecked(self.s.get('load_text_plus_binary_ipl_set'))
-        self._load_streams_chk.setToolTip(
-            "When loading a text IPL, also automatically load all of\n"
-            "its known associated binary stream files - many text IPLs\n"
-            "are mostly LOD content, with the normal-detail models\n"
-            "living in their streams instead.")
-        ld_form.addRow(self._load_streams_chk)
-
-        self._verbose_loading_chk = QCheckBox("Show Full Loading Models (Debug)")
-        self._verbose_loading_chk.setChecked(self.s.get('show_verbose_loading_dialog'))
-        self._verbose_loading_chk.setToolTip(
-            "Show a scrolling debug dialog listing every model as it\n"
-            "loads, one line per instance.")
-        ld_form.addRow(self._verbose_loading_chk)
-
-        ld_form.addRow(QLabel(""))
-        ld_form.addRow(QLabel("—  Texture size limit  —"))
-
-        self._downscale_chk = QCheckBox("Reduce large textures")
-        self._downscale_chk.setChecked(self.s.get('texture_downscale_enabled'))
-        self._downscale_chk.setToolTip(
-            "Reduce any texture larger than the threshold below down\n"
-            "to the target size before uploading it to the GPU - saves\n"
-            "significant VRAM on maps with many large textures, at a\n"
-            "quality cost for those specific textures.")
-        ld_form.addRow(self._downscale_chk)
-
-        self._downscale_threshold_spin = QSpinBox()
-        self._downscale_threshold_spin.setRange(64, 4096)
-        self._downscale_threshold_spin.setSingleStep(64)
-        self._downscale_threshold_spin.setValue(self.s.get('texture_downscale_threshold'))
-        self._downscale_threshold_spin.setToolTip("Textures larger than this (in either dimension) get reduced")
-        ld_form.addRow("Reduce anything over:", self._downscale_threshold_spin)
-
-        self._downscale_target_spin = QSpinBox()
-        self._downscale_target_spin.setRange(16, 2048)
-        self._downscale_target_spin.setSingleStep(64)
-        self._downscale_target_spin.setValue(self.s.get('texture_downscale_target'))
-        self._downscale_target_spin.setToolTip("Size to reduce large textures down to")
-        ld_form.addRow("Reduce down to:", self._downscale_target_spin)
-
-        ld_lay.addLayout(ld_form)
-        ld_lay.addStretch()
-        tabs.addTab(loading_tab, "Loading")
-
-        # - Map Assets tab (Aug 1 2026)
-        assets_tab = QWidget()
-        as_lay = QVBoxLayout(assets_tab)
-        load_generic_btn = QPushButton("Load Generic.txd Manually")
-        load_generic_btn.setToolTip(
-            "Manually (re)load generic.txd - the shared texture archive\n"
-            "many models reference without having their own dedicated\n"
-            "TXD. Not normally needed - generic.ide's referenced TXDs\n"
-            "(including generic.txd itself) are already preloaded\n"
-            "automatically whenever a world loads. Tries the game's\n"
-            "indexed IMG archives first (e.g. gta3.img, which every game\n"
-            "always loads via the exe), then falls back to {game root}/\n"
-            "models/generic.txd as a loose file.")
-        if self._workshop is not None:
-            load_generic_btn.clicked.connect(self._workshop._on_load_generic_txd_clicked)
-        as_lay.addWidget(load_generic_btn)
-        as_lay.addStretch()
-        tabs.addTab(assets_tab, "Map Assets")
-
-        # - Viewport tab (World View movement settings)
-        viewport_tab = QWidget()
-        vp_lay = QVBoxLayout(viewport_tab)
-        vp_form = QFormLayout()
-        vp_form.setSpacing(8)
-
-        self._pan_button_combo = QComboBox()
-        self._pan_button_combo.addItems(["left", "middle", "right"])
-        self._pan_button_combo.setCurrentText(self.s.get('viewport_pan_button'))
-        vp_form.addRow("Pan button:", self._pan_button_combo)
-
-        self._rotate_button_combo = QComboBox()
-        self._rotate_button_combo.addItems(["left", "middle", "right"])
-        self._rotate_button_combo.setCurrentText(self.s.get('viewport_rotate_button'))
-        vp_form.addRow("Rotate button (3D only):", self._rotate_button_combo)
-        vp_lay.addLayout(vp_form)
-
-        vp_lay.addWidget(QLabel(
-            "Invert pan direction per viewport - Top/Side/Front/3D each\n"
-            "have a different camera orientation, so correct this per\n"
-            "mode if panning feels backwards in one but not another."))
-
-        self._pan_invert_checks = {}
-        invert_cfg = self.s.get('viewport_pan_invert') or {}
-        for mode in ("Top", "Side", "Front", "3D"):
-            box = QGroupBox(mode)
-            box_lay = QHBoxLayout(box)
-            axis_cfg = invert_cfg.get(mode, {'x': False, 'y': False})
-            chk_x = QCheckBox("Invert X"); chk_x.setChecked(axis_cfg.get('x', False))
-            chk_y = QCheckBox("Invert Y"); chk_y.setChecked(axis_cfg.get('y', False))
-            box_lay.addWidget(chk_x); box_lay.addWidget(chk_y)
-            vp_lay.addWidget(box)
-            self._pan_invert_checks[mode] = (chk_x, chk_y)
-        vp_lay.addStretch()
-        tabs.addTab(viewport_tab, "Viewport")
-
-        root.addWidget(tabs)
-
-        # OK / Cancel
-        btns = QHBoxLayout()
-        btns.addStretch()
-        ok_btn = QPushButton("OK")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self._accept)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        btns.addWidget(ok_btn); btns.addWidget(cancel_btn)
-        root.addLayout(btns)
-
-    def _accept(self): #vers 2
-        self.s.set('default_width',    self._w_spin.value())
-        self.s.set('default_height',   self._h_spin.value())
-        self.s.set('default_zoom',     self._zoom_spin.value())
-        self.s.set('undo_levels',      self._undo_spin.value())
-        # The following 14 widgets (Aug 1 2026)
-        grid_chk = getattr(self, '_grid_chk', None)
-        if grid_chk is not None:
-            self.s.set('show_pixel_grid', grid_chk.isChecked())
-        fit_resize_chk = getattr(self, '_fit_resize_chk', None)
-        if fit_resize_chk is not None:
-            self.s.set('zoom_to_fit_resize', fit_resize_chk.isChecked())
-        self.s.set('menu_style',              self._menu_style_combo.currentText())
-        self.s.set('menu_bar_height',         self._menu_bar_height_spin.value())
-        self.s.set('menu_bar_font_size',      self._menu_bar_font_spin.value())
-        self.s.set('menu_dropdown_font_size', self._menu_dropdown_font_spin.value())
-        for attr, key in (
-            ('_img_pal_cols_spin', 'img_pal_cols'), ('_img_pal_rows_spin', 'img_pal_rows'),
-            ('_user_pal_cols_spin', 'user_pal_cols'), ('_user_pal_rows_spin', 'user_pal_rows'),
-        ):
-            w = getattr(self, attr, None)
-            if w is not None:
-                self.s.set(key, w.value())
-        platform_combo = getattr(self, '_platform_combo', None)
-        if platform_combo is not None:
-            self.s.set('platform_mode', platform_combo.currentText())
-        cell_grid_chk = getattr(self, '_cell_grid_chk', None)
-        if cell_grid_chk is not None:
-            self.s.set('show_cell_grid', cell_grid_chk.isChecked())
-        grid_color_btn = getattr(self, '_grid_color_btn', None)
-        if grid_color_btn is not None:
-            self.s.set('grid_color', grid_color_btn._chosen)
-        ants_chk = getattr(self, '_ants_chk', None)
-        if ants_chk is not None:
-            self.s.set('marching_ants_enabled', ants_chk.isChecked())
-        ants_style_combo = getattr(self, '_ants_style_combo', None)
-        if ants_style_combo is not None:
-            self.s.set('marching_ants_style', ants_style_combo.currentText())
-        ants_fg_btn = getattr(self, '_ants_fg_btn', None)
-        if ants_fg_btn is not None:
-            self.s.set('marching_ants_fg', ants_fg_btn._chosen)
-        ants_bg_btn = getattr(self, '_ants_bg_btn', None)
-        if ants_bg_btn is not None:
-            self.s.set('marching_ants_bg', ants_bg_btn._chosen)
-        ants_speed_spin = getattr(self, '_ants_speed_spin', None)
-        if ants_speed_spin is not None:
-            self.s.set('marching_ants_speed', ants_speed_spin.value())
-        self.s.set('ribbon_icon_size_vert', self._ribbon_icon_vert_spin.value())
-        self.s.set('ribbon_padding_vert',   self._ribbon_pad_vert_spin.value())
-        self.s.set('ribbon_icon_size_horz', self._ribbon_icon_horz_spin.value())
-        self.s.set('ribbon_padding_horz',   self._ribbon_pad_horz_spin.value())
-        self.s.set('ribbon_button_padding_vert', self._ribbon_btn_pad_vert_spin.value())
-        self.s.set('ribbon_button_padding_horz', self._ribbon_btn_pad_horz_spin.value())
-        self.s.set('ribbon_opacity',        self._ribbon_opacity_spin.value())
-        self.s.set('show_bitmap_list', self._bitmap_chk.isChecked())
-        registry = getattr(self._workshop, '_WIDGET_REGISTRY', [])
-        for entry in registry:
-            setting_key = entry.get('enabled_setting') or f"widget_{entry['key']}_enabled"
-            chk = self._widget_chks.get(entry['key'])
-            if chk is not None:
-                self.s.set(setting_key, chk.isChecked())
-        self.s.set('show_statusbar',   self._statusbar_chk.isChecked())
-        self.s.set('ui_font_size',     self._font_size_spin.value())
-        self.s.set('tool_icon_size',   self._icon_size_spin.value())
-        self.s.set('tool_icon_color',  self._icon_color_combo.currentText())
-        self.s.set('tool_columns',     [3, 4, 5, 6][self._cols_combo.currentIndex()])
-        hidden = [tid for tid, chk in self._gadget_chks.items() if not chk.isChecked()]
-        self.s.set('hidden_tools',     hidden)
-
-        self.s.set('viewport_pan_button',    self._pan_button_combo.currentText())
-        self.s.set('viewport_rotate_button', self._rotate_button_combo.currentText())
-        invert_cfg = {}
-        for mode, (chk_x, chk_y) in self._pan_invert_checks.items():
-            invert_cfg[mode] = {'x': chk_x.isChecked(), 'y': chk_y.isChecked()}
-        self.s.set('viewport_pan_invert', invert_cfg)
-
-        self.s.set('load_text_plus_binary_ipl_set', self._load_streams_chk.isChecked())
-        self.s.set('show_verbose_loading_dialog',   self._verbose_loading_chk.isChecked())
-        self.s.set('texture_downscale_enabled',   self._downscale_chk.isChecked())
-        self.s.set('texture_downscale_threshold', self._downscale_threshold_spin.value())
-        self.s.set('texture_downscale_target',    self._downscale_target_spin.value())
-
-        self.s.save()
-        # Re-apply immediately to any already-open World View panes, so
-        # the change takes effect without needing to reopen/restart.
-        if self._workshop is not None:
-            for pane in getattr(self._workshop, '_world_panes', []):
-                self._workshop._apply_viewport_movement_settings(pane, pane._view_label)
-            vp = getattr(self._workshop, 'preview_widget', None)
-            if vp is not None and hasattr(vp, 'set_texture_downscale_settings'):
-                vp.set_texture_downscale_settings(
-                    self._downscale_chk.isChecked(),
-                    self._downscale_threshold_spin.value(),
-                    self._downscale_target_spin.value())
-        self.accept()
 
 
+class _MapWaterDepth: #vers 2
+    """Depth gauge source: water cell heights plus the Z offset; dragging sets the offset."""
 
-class _CornerOverlay(QWidget):
-    """Transparent overlay that draws corner resize triangles on top of all children.
-    Uses setMask() so only the triangle pixels exist — fully transparent elsewhere.
-    WA_AlwaysStackOnTop keeps it above all sibling widgets on Wayland/KDE."""
+    def __init__(self, ws): #vers 1
+        self._ws = ws
 
-    SIZE = 20   # triangle leg size in pixels
+    def _cache(self): #vers 2
+        """(distinct heights, range, sea level), recomputed only when the cell list changes."""
+        from apps.methods.ui_color import depth_range
+        vp = getattr(self._ws, 'preview_widget', None)
+        cells = getattr(vp, '_water2_cells', None) or []
+        key = (id(cells), len(cells))
+        if getattr(self, '_key', None) != key:
+            zs = [round(c[4], 2) for c in cells]
+            lo, hi = depth_range(zs)
+            sea = max(set(zs), key=zs.count) if zs else 0.0
+            self._key, self._vals = key, sorted(set(zs))
+            self._rng, self._sea = (lo - 25.0, hi + 25.0), sea   # room to drag the offset
+        return self._vals, self._rng, self._sea
 
-    def __init__(self, parent): #vers 3
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
-        self.setWindowFlags(Qt.WindowType.Widget)
-        self._hover_corner = None
-        self._app_settings = None
-        self.setGeometry(0, 0, parent.width(), parent.height())
-        self._update_mask()
+    def _offset(self): #vers 1
+        vp = getattr(self._ws, 'preview_widget', None)
+        return float(getattr(vp, '_water2_height_offset', 0.0) or 0.0)
 
-    def _update_mask(self): #vers 1
-        """Create a mask covering only the four corner triangles."""
-        from PyQt6.QtGui import QRegion, QPolygon
-        from PyQt6.QtCore import QPoint
-        s = self.SIZE
-        w, h = self.width(), self.height()
-        region = QRegion()
-        for pts in [
-            [QPoint(0,0),    QPoint(s,0),    QPoint(0,s)],     # top-left
-            [QPoint(w,0),    QPoint(w-s,0),  QPoint(w,s)],     # top-right
-            [QPoint(0,h),    QPoint(s,h),    QPoint(0,h-s)],   # bottom-left
-            [QPoint(w,h),    QPoint(w-s,h),  QPoint(w,h-s)],   # bottom-right
-        ]:
-            region = region.united(QRegion(QPolygon(pts)))
-        self.setMask(region)
+    def z_values(self): #vers 3
+        off = self._offset()
+        return [z + off for z in self._cache()[0]]
 
-    def update_state(self, hover_corner, app_settings): #vers 1
-        self._hover_corner = hover_corner
-        self._app_settings = app_settings
+    def z_range(self): #vers 3
+        return self._cache()[1]
+
+    def selected_z(self): #vers 2
+        """Sea level (most common height) with the Z offset; None without water."""
+        vals, _rng, sea = self._cache()
+        return sea + self._offset() if vals else None
+
+    def set_selected_z(self, z, start=False): #vers 1
+        """Drag: Z offset = z - sea level (saved to the map settings)."""
+        off = round(z - self._cache()[2], 2)
+        vp = getattr(self._ws, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'set_water2_height_offset'):
+            vp.set_water2_height_offset(off)
+        self._ws.map_settings.set('water2_height_offset', off)
+        self._ws._set_status(f"Water Z offset {off:+.2f}")
+        for g in (getattr(self._ws, '_water_gauge', None), getattr(self._ws, '_vp_gauges', None)):
+            if g is not None:
+                g.update()
+
+
+class _ViewportGauges(QWidget): #vers 1
+    """Viewport overlay, middle left or right: water depth (drag = Z offset)
+    when water is shown, else the radar height colours when the radar layer is on."""
+
+    WIDTH = 26
+
+    def __init__(self, ws, vp): #vers 1
+        super().__init__(vp)
+        from PyQt6.QtWidgets import QVBoxLayout
+        from apps.components.Water_Editor.water_workshop import WaterZGauge
+        from apps.components.Radar_Editor.radar_workshop import _HeightGauge
+        self._ws, self._vp = ws, vp
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.water = WaterZGauge(_MapWaterDepth(ws))
+        self.height_gauge = _HeightGauge()
+        self.height_gauge.setToolTip("Radar height colours: forest (high) to deep water (low)")
+        lay.addWidget(self.water)
+        lay.addWidget(self.height_gauge)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._menu)
+        for w in (self.water, self.height_gauge):
+            w.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            w.customContextMenuRequested.connect(lambda pos, w=w: self._menu(w.mapTo(self, pos)))
+        vp.installEventFilter(self)
+        self.refresh()
+
+    def eventFilter(self, obj, ev): #vers 1
+        from PyQt6.QtCore import QEvent
+        if obj is self._vp and ev.type() == QEvent.Type.Resize:
+            self._place()
+        return False
+
+    def refresh(self): #vers 1
+        """Pick water / radar / hidden from what the viewport shows."""
+        vp, side = self._vp, self._ws.map_settings.get('viewport_gauge_side') or 'right'
+        water = bool(getattr(vp, 'show_water', False) and getattr(vp, '_water2_cells', None))
+        radar = bool(getattr(vp, '_show_radar_tex_layer', False))
+        self.water.setVisible(water)
+        self.height_gauge.setVisible(radar and not water)
+        self.setVisible(side != 'off' and (water or radar))
+        self._place()
         self.update()
 
-    def setGeometry(self, *args): #vers 1
-        super().setGeometry(*args)
-        self._update_mask()
+    def _place(self): #vers 1
+        vp = self._vp
+        h = max(120, vp.height() // 2)
+        side = self._ws.map_settings.get('viewport_gauge_side') or 'right'
+        x = 8 if side == 'left' else vp.width() - self.WIDTH - 8
+        self.setGeometry(x, (vp.height() - h) // 2, self.WIDTH, h)
+        self.raise_()
 
-    def resizeEvent(self, event): #vers 1
-        super().resizeEvent(event)
-        self._update_mask()
+    def update(self): #vers 1
+        super().update()
+        self.water.update()
 
-    def paintEvent(self, event): #vers 2
-        s = self.SIZE
-        _p = self.palette()
-        _accent_fallback = _p.color(_p.ColorRole.Highlight)
-        if self._app_settings:
-            try:
-                colors = self._app_settings.get_theme_colors()
-                accent = QColor(colors.get('accent_primary', _accent_fallback.name()))
-            except Exception:
-                accent = _accent_fallback
-        else:
-            accent = _accent_fallback
-        accent.setAlpha(200)
-        hover_c = QColor(accent); hover_c.setAlpha(255)
-        w, h = self.width(), self.height()
-        corners = {
-            'top-left':     [(0,0),  (s,0),   (0,s)],
-            'top-right':    [(w,0),  (w-s,0), (w,s)],
-            'bottom-left':  [(0,h),  (s,h),   (0,h-s)],
-            'bottom-right': [(w,h),  (w-s,h), (w,h-s)],
-        }
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        for name, pts in corners.items():
-            path = QPainterPath()
-            path.moveTo(*pts[0]); path.lineTo(*pts[1]); path.lineTo(*pts[2])
-            path.closeSubpath()
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(hover_c if self._hover_corner == name else accent))
-            painter.drawPath(path)
-        painter.end()
+    def _menu(self, pos): #vers 1
+        """Right-click: move left / right, or hide."""
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        for label, side in (("Gauge Left", 'left'), ("Gauge Right", 'right'), ("Hide Gauge", 'off')):
+            menu.addAction(label, lambda s=side: self.set_side(s))
+        menu.exec(self.mapToGlobal(pos))
+
+    def set_side(self, side): #vers 1
+        self._ws.map_settings.set('viewport_gauge_side', side)
+        self.refresh()
 
 
 class _MapOverlayToggleButton(QToolButton): #vers 2
     """One compact button replacing a pair of checkboxes (show/hide +
     edit mode) for a single map overlay type (Aug 18 2026).
 
-    Optional icon support added (Aug 20 2026, per Keith: "we could
+    Optional icon support added (Aug 20 2026,  "we could
     add a toggle in settings, Show IPL Controls = as [Buttons] or
     ribbon icons") - label is always kept as this button's own real
     text (used for its tooltip and QMessageBox-style status text
@@ -4212,7 +892,7 @@ class _MapOverlayToggleButton(QToolButton): #vers 2
 
     def set_middle_click_menu_available(self, available: bool): #vers 1
         """Mark whether this button has a real middle-click menu
-        connected (Aug 21 2026, per Keith: "add these to the svg icon
+        connected (Aug 21 2026,  "add these to the svg icon
         zon button with a middle-click, and move those functions
         over. Same with cull, occl, auzo, grge") - only updates this
         button's own real tooltip text; map_workshop.py itself still
@@ -4228,12 +908,12 @@ class _MapOverlayToggleButton(QToolButton): #vers 2
 
     def set_display_style(self, icon_only: bool): #vers 2
         """Switch between this button's own real text label and its
-        real icon (Aug 20 2026, per Keith: "Show IPL Controls = as
+        real icon (Aug 20 2026,  "Show IPL Controls = as
         [Buttons] or ribbon icons") - falls back to text-only when
         icon_only is requested but no real icon was ever actually set
         for this button, rather than rendering a blank button.
 
-        Real fix (Aug 20 2026, per Keith: "the svg icons, need to be
+         fix (Aug 20 2026,  "the svg icons, need to be
         square like the others in the ribbons... its only the new
         ribbon buttons that are a different size, they need to be the
         same size as the existing buttons") - __init__ only ever fixed
@@ -4271,7 +951,7 @@ class _MapOverlayToggleButton(QToolButton): #vers 2
                 if mw is not None and hasattr(mw, '_set_status'):
                     mw._set_status(f"No edit mode available for {self.text()} yet")
         elif event.button() == Qt.MouseButton.MiddleButton:
-            # Real fix (Aug 21 2026, per Keith: "the new buttons,
+            #  fix (Aug 21 2026,  "the new buttons,
             # +zon, -zon, and save zon... add these to the svg icon
             # zon button with a middle-click, and move those
             # functions over") - just emits; map_workshop.py owns
@@ -4303,17 +983,6 @@ class _MapOverlayToggleButton(QToolButton): #vers 2
         """QCheckBox-compatible accessor (Aug 18 2026)"""
         return self._shown
 
-    def set_editing(self, editing: bool): #vers 1
-        self._editing = editing
-        self._apply_style()
-
-    def set_label(self, text: str): #vers 1
-        """Update this button's own visible text after construction
-        (Aug 20 2026, per Keith: "[TCYC] button doesn't appear to
-        change as time advances") - lets a caller show live feedback
-        (e.g. the current simulated hour) on the button itself,
-        rather than only the toolbar row's separate time display."""
-        self.setText(text)
 
 
     def _apply_style(self): #vers 2
@@ -4497,7 +1166,7 @@ class _InstanceEditPanel(QWidget):
     _SCALE_SMALL_STEP = 0.1
     _SCALE_LARGE_STEP = 1.0
 
-    def __init__(self, workshop, parent=None): #vers 3
+    def __init__(self, workshop, parent=None): #vers 4
         super().__init__(parent)
         self._workshop = workshop
         self._inst = None
@@ -4579,17 +1248,12 @@ class _InstanceEditPanel(QWidget):
 
         bottom_row = QHBoxLayout()
         apply_btn = self._make_standard_button("Apply", get_checkmark_icon(18, icon_color), tooltip=
-            "STUB - edits made here (Position/Rotation/Scale) already\n"
-            "apply live and update the viewport immediately as you nudge\n"
-            "them, so there's nothing separate to 'Apply' yet. Will do\n"
-            "something once raw-line editing (per the redesign spec) is\n"
-            "built - see TODO.md.")
+            "Apply the edited IPL and IDE lines above (undoable).\n"
+            "Position/Rotation/Scale nudges already apply live.")
         undo_btn = self._make_standard_button("Undo", get_undo_icon(18, icon_color))
         close_btn = self._make_standard_button("Close", get_close_icon(18, icon_color))
         save_btn = self._make_standard_button("Save", get_save_icon(18, icon_color), tooltip=
-            "STUB - no write-back infrastructure exists for any file type\n"
-            "in Map Workshop yet (see TODO.md) - edits stay in memory only,\n"
-            "nothing gets written back to the .ipl/.ide file on disk.")
+            "Write this object's IPL and IDE changes to disk (backup first).")
         apply_btn.clicked.connect(self._on_apply_clicked)
         undo_btn.clicked.connect(self._on_undo_clicked)
         close_btn.clicked.connect(self._on_close_clicked)
@@ -4668,19 +1332,6 @@ class _InstanceEditPanel(QWidget):
             btn.setToolTip(tooltip)
         return btn
 
-    def _set_section_lines(self, box, lines): #vers 1
-        lay = box.layout()
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w: w.deleteLater()
-        if lines:
-            for line in lines:
-                lay.addWidget(QLabel(line))
-        else:
-            empty = QLabel("(none)")
-            empty.setStyleSheet("color: palette(mid);")
-            lay.addWidget(empty)
 
     def _clear_layout_recursive(self, layout): #vers 1
         """Remove and delete every item in a layout, recursing into
@@ -4696,7 +1347,7 @@ class _InstanceEditPanel(QWidget):
             if nested is not None:
                 self._clear_layout_recursive(nested)
 
-    def _populate_identity_section(self, ipl_line, ide_line, txd_name, interior, lod_index): #vers 3
+    def _populate_identity_section(self, ipl_line, ide_line, txd_name, interior, lod_index): #vers 5
         """Identity section: raw IPL line, raw IDE line, and a 3rd row
         with the TXD's real status - one of three messages depending
         on what actually happened when looking it up (Aug 1 2026)"""
@@ -4714,8 +1365,11 @@ class _InstanceEditPanel(QWidget):
         ipl_show_btn.clicked.connect(
             lambda: self._workshop._jump_to_ipl_line(self._inst.source_ipl, self._inst.line_no))
         ipl_row.addWidget(ipl_show_btn)
-        ipl_row.addWidget(QLabel(ipl_line))
-        ipl_row.addStretch()
+        self._ipl_line_edit = QLineEdit(ipl_line)
+        self._ipl_line_edit.setToolTip(
+            "id, name, interior, pos x/y/z, scale x/y/z, rot x/y/z/w\nEdit and press Apply")
+        self._ipl_line_edit.returnPressed.connect(self._on_apply_clicked)
+        ipl_row.addWidget(self._ipl_line_edit, 1)
         lay.addLayout(ipl_row)
 
         ide_row = QHBoxLayout()
@@ -4728,8 +1382,18 @@ class _InstanceEditPanel(QWidget):
                 lambda: self._workshop._jump_to_ide_line(
                     self._current_ide_obj.source_ide, self._current_ide_obj.line_no))
         ide_row.addWidget(ide_show_btn)
-        ide_row.addWidget(QLabel(ide_line))
-        ide_row.addStretch()
+        obj = self._current_ide_obj
+        raw = self._workshop._ide_raw_line(obj) if obj is not None else None
+        self._ide_line_edit = QLineEdit(raw.rstrip('\r\n') if raw is not None else ide_line)
+        self._ide_line_edit.setEnabled(raw is not None)
+        self._ide_line_edit.setToolTip(
+            "The IDE line exactly as in the file (any section) - edit and press Apply.\n"
+            "The model ID must stay the same.")
+        self._ide_line_edit.returnPressed.connect(self._on_apply_clicked)
+        ide_row.addWidget(self._ide_line_edit, 1)
+        if obj is not None:
+            src = QLabel(f"{obj.source_ide} (line {obj.line_no})")
+            ide_row.addWidget(src)
         lay.addLayout(ide_row)
 
         row = QHBoxLayout()
@@ -4821,8 +1485,24 @@ class _InstanceEditPanel(QWidget):
         dlg.resize(420, 260)
         dlg.exec()
 
-    def _show_texture_thumbnail_strip(self): #vers 1
-        """Compact horizontal row of small texture thumbnail"""
+    def _show_texture_thumbnail_strip(self): #vers 5
+        """Texture editor dialog - resizable grid of texture
+        thumbnails with Add/Del/Export/Replace/Rename/Apply/Save
+        actions (Sep 5 2026  own texture-editor button
+        request), plus the existing Save as TXD/Save as Single
+        Textures export options. Double-click opens a big, resizable
+        close-up view of one texture (Sep 5 2026,  "i like
+        to see things close up").
+
+        HONEST LIMITATION: Add/Del/Replace/Rename only edit the in-
+        memory copy of the textures dict this dialog holds - there is
+        no real write-back-to-disk for TXD files anywhere in this
+        project yet (same limitation already documented for IPL/IDE/
+        DAT/IMG editing in the Editing Panel dock). Apply/Save keep
+        those in-memory edits for this dialog's own session, so Save
+        as TXD/Save as Single Textures export what you've actually
+        changed - they do not write anything back into the original
+        .img archive."""
         inst = self._inst
         if inst is None:
             return
@@ -4831,32 +1511,324 @@ class _InstanceEditPanel(QWidget):
         txd_name = obj.txd_name if obj else ""
         textures, _source, status = (self._workshop._get_txd_textures(txd_name)
                                      if txd_name else (None, None, 'missing'))
+        if not textures:
+            QMessageBox.information(self, "Textures",
+                f"{txd_name}.txd is {status}" if txd_name else "(no TXD)")
+            return
+        # Our own mutable copy - edits here don't touch model_cache's
+        # cached dict unless the user explicitly exports them out.
+        textures = dict(textures)
+
+        from apps.components.Map_Editor.depends.overlay_icons import OverlayIcons
+
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Textures - {txd_name}.txd" if txd_name else "Textures")
+        dlg.resize(720, 520)
+        dlg.setMinimumSize(420, 320)
         outer = QVBoxLayout(dlg)
-        if not textures:
-            outer.addWidget(QLabel(f"{txd_name}.txd is {status}" if txd_name else "(no TXD)"))
-        else:
-            strip = QHBoxLayout()
-            for tex in textures.values():
-                cell = QVBoxLayout()
-                thumb_lbl = QLabel()
-                pixmap = self._workshop._create_texture_thumbnail(
-                    tex.get('rgba_data'), tex.get('width', 0), tex.get('height', 0))
-                if pixmap is not None:
-                    thumb_lbl.setPixmap(pixmap)
-                thumb_lbl.setFixedSize(32, 32)
-                name_lbl = QLabel(tex.get('name', ''))
-                name_lbl.setStyleSheet("font-size: 9px;")
-                name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                cell.addWidget(thumb_lbl)
-                cell.addWidget(name_lbl)
-                strip.addLayout(cell)
-            strip.addStretch()
-            scroller = QWidget()
-            scroller.setLayout(strip)
-            outer.addWidget(scroller)
+
+        list_widget = QListWidget()
+
+        def _selected_tex():
+            item = list_widget.currentItem()
+            return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+        # Action row (Sep 5 2026,  "when adding new buttons,
+        # if space is limited, revert to SVG icons") - icon-only,
+        # tooltip carries the label.
+        action_row = QHBoxLayout()
+
+        def _mkbtn(icon_fn, tooltip, handler):
+            btn = QToolButton()
+            btn.setIcon(icon_fn(20))
+            btn.setToolTip(tooltip)
+            btn.clicked.connect(handler)
+            return btn
+
+        add_btn = _mkbtn(OverlayIcons.add_texture_icon, "Add Texture...",
+            lambda: self._on_add_texture(dlg, textures, list_widget))
+        del_btn = _mkbtn(OverlayIcons.del_texture_icon, "Delete Texture",
+            lambda: self._on_del_texture(dlg, textures, list_widget))
+        export_btn = _mkbtn(OverlayIcons.export_texture_icon, "Export Texture...",
+            lambda: self._on_export_one_texture(dlg, _selected_tex()))
+        replace_btn = _mkbtn(OverlayIcons.replace_texture_icon, "Replace Texture...",
+            lambda: self._on_replace_texture(dlg, textures, list_widget))
+        rename_btn = _mkbtn(OverlayIcons.rename_texture_icon, "Rename Texture...",
+            lambda: self._on_rename_texture(dlg, textures, list_widget))
+        apply_btn = _mkbtn(OverlayIcons.apply_texture_icon,
+            "Apply - keep these edits for this session", lambda: None)
+        save_btn = _mkbtn(OverlayIcons.save_texture_icon,
+            "Save - keep these edits, then close", lambda: dlg.accept())
+        for b in (add_btn, del_btn, export_btn, replace_btn, rename_btn):
+            action_row.addWidget(b)
+        action_row.addSpacing(12)
+        action_row.addWidget(apply_btn)
+        action_row.addWidget(save_btn)
+        action_row.addStretch()
+        save_txd_btn = QPushButton("Save as TXD...")
+        save_txd_btn.clicked.connect(lambda: self._save_raw_txd_file(txd_name))
+        action_row.addWidget(save_txd_btn)
+        save_folder_btn = QPushButton("Save as Single Textures...")
+        save_folder_btn.clicked.connect(
+            lambda: self._save_all_textures_to_folder(textures, txd_name))
+        action_row.addWidget(save_folder_btn)
+        outer.addLayout(action_row)
+
+        # Thumbnail grid (Sep 5 2026,  "have the ability to
+        # select the listed textures; show as a large, resizable
+        # option window. i like to see things close up.") -
+        # QListWidget IconMode gives real resizing/scrolling/selection
+        # for free, replacing the old fixed QHBoxLayout-of-QLabels strip.
+        list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+        list_widget.setIconSize(QSize(48, 48))
+        list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+        list_widget.setSpacing(10)
+        list_widget.setMovement(QListWidget.Movement.Static)
+        self._populate_texture_list_widget(list_widget, textures)
+        list_widget.itemDoubleClicked.connect(
+            lambda item: self._show_texture_zoom_view(
+                dlg, item.data(Qt.ItemDataRole.UserRole)))
+        outer.addWidget(list_widget, 1)
+
         dlg.exec()
+
+    def _populate_texture_list_widget(self, list_widget, textures): #vers 1
+        """(Re)build a QListWidget's items from a textures dict,
+        keyed by lowercase name - shared by the initial build and by
+        Add/Del/Rename/Replace's own refresh after editing."""
+        list_widget.clear()
+        for tex in textures.values():
+            pixmap = self._workshop._create_texture_thumbnail(
+                tex.get('rgba_data'), tex.get('width', 0), tex.get('height', 0))
+            item = QListWidgetItem(tex.get('name', ''))
+            if pixmap is not None:
+                item.setIcon(QIcon(pixmap))
+            item.setData(Qt.ItemDataRole.UserRole, tex)
+            list_widget.addItem(item)
+
+    def _show_texture_zoom_view(self, parent, tex): #vers 2
+        """Big, resizable close-up view of one texture (Sep 5 2026,
+         "show as a large, resizable option window. i like
+        to see things close up.") - shown at native resolution (or
+        upscaled if tiny) inside a scroll area, so the window is
+        genuinely resizable and the image can be inspected at real
+        pixel detail rather than force-fitted and softened."""
+        if tex is None:
+            return
+        rgba = tex.get('rgba_data')
+        w, h = tex.get('width', 0), tex.get('height', 0)
+        if not (rgba and w > 0 and h > 0):
+            return
+        qi = QImage(bytes(rgba), w, h, w * 4, QImage.Format.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(qi)
+        scale = 4 if max(w, h) <= 64 else (2 if max(w, h) <= 128 else 1)
+        if scale > 1:
+            pixmap = pixmap.scaled(w * scale, h * scale,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+
+        dlg = QDialog(parent)
+        dlg.setWindowTitle(tex.get('name', 'Texture'))
+        dlg.resize(min(pixmap.width() + 40, 900), min(pixmap.height() + 80, 900))
+        lay = QVBoxLayout(dlg)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        img_lbl = QLabel()
+        img_lbl.setPixmap(pixmap)
+        scroll.setWidget(img_lbl)
+        lay.addWidget(scroll, 1)
+        info = QLabel(f"{tex.get('name','')} — {w}x{h} — {tex.get('format','')}"
+                      + (f" (shown at {scale}x)" if scale > 1 else ""))
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(info)
+        dlg.exec()
+
+    def _texture_name_exists(self, textures, name, exclude_name=None): #vers 1
+        """True if name (case-insensitive) already exists among
+        textures - checking every currently-loaded texture name in
+        this TXD,  "check with the database that the
+        texture I add or rename... doesn't already exist". Since a
+        texture's separate normal/alpha companion (e.g. GTA's own
+        "namea" convention) is itself just another regular named
+        entry in the same TXD, checking every existing name here
+        already covers those too - no separate suffix-specific logic
+        needed."""
+        name_lower = name.strip().lower()
+        if not name_lower:
+            return True
+        exclude_lower = exclude_name.strip().lower() if exclude_name else None
+        for tex in textures.values():
+            existing = tex.get('name', '').lower()
+            if existing == exclude_lower:
+                continue
+            if existing == name_lower:
+                return True
+        return False
+
+    def _on_add_texture(self, parent, textures, list_widget): #vers 1
+        """Add Texture - load an image file, ask for a name, check it
+        doesn't already exist in this TXD, add it to the in-memory
+        set (Sep 5 2026  own texture-editor button
+        request)."""
+        path, _ = QFileDialog.getOpenFileName(
+            parent, "Add Texture", os.path.expanduser('~'),
+            "Images (*.png *.bmp *.jpg *.jpeg *.tga)")
+        if not path:
+            return
+        qi = QImage(path)
+        if qi.isNull():
+            QMessageBox.warning(parent, "Add Texture", f"Couldn't read image:\n{path}")
+            return
+        default_name = os.path.splitext(os.path.basename(path))[0]
+        name, ok = QInputDialog.getText(parent, "Add Texture", "Texture name:",
+                                         text=default_name)
+        if not ok or not name.strip():
+            return
+        if self._texture_name_exists(textures, name):
+            QMessageBox.warning(parent, "Add Texture",
+                f'A texture named "{name.strip()}" already exists in this TXD.')
+            return
+        qi = qi.convertToFormat(QImage.Format.Format_RGBA8888)
+        rgba = bytes(qi.bits().asstring(qi.width() * qi.height() * 4))
+        tex = {'name': name.strip(), 'width': qi.width(), 'height': qi.height(),
+               'rgba_data': rgba, 'format': 'RGBA32'}
+        textures[name.strip().lower()] = tex
+        self._populate_texture_list_widget(list_widget, textures)
+
+    def _on_del_texture(self, parent, textures, list_widget): #vers 1
+        """Delete Texture - remove the selected texture from the in-
+        memory set, after confirming."""
+        item = list_widget.currentItem()
+        if item is None:
+            return
+        tex = item.data(Qt.ItemDataRole.UserRole)
+        name = tex.get('name', '')
+        if QMessageBox.question(
+                parent, "Delete Texture", f'Delete "{name}" from this TXD?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                ) != QMessageBox.StandardButton.Yes:
+            return
+        textures.pop(name.lower(), None)
+        self._populate_texture_list_widget(list_widget, textures)
+
+    def _on_export_one_texture(self, parent, tex): #vers 1
+        """Export Texture - save just the currently-selected texture
+        as a full-resolution PNG."""
+        if tex is None:
+            QMessageBox.information(parent, "Export Texture", "Select a texture first.")
+            return
+        name = tex.get('name', '') or 'texture'
+        rgba, w, h = tex.get('rgba_data'), tex.get('width', 0), tex.get('height', 0)
+        if not (rgba and w > 0 and h > 0):
+            return
+        start_dir = getattr(self._workshop, '_texlist_folder', '') or os.path.expanduser('~')
+        path, _ = QFileDialog.getSaveFileName(
+            parent, "Export Texture", os.path.join(start_dir, name + '.png'),
+            "PNG files (*.png)")
+        if not path:
+            return
+        qi = QImage(bytes(rgba), w, h, w * 4, QImage.Format.Format_RGBA8888)
+        if not qi.save(path):
+            QMessageBox.warning(parent, "Export Texture", "Failed to save.")
+
+    def _on_replace_texture(self, parent, textures, list_widget): #vers 1
+        """Replace Texture - swap the selected texture's own image
+        data for a new file's, keeping its existing name."""
+        item = list_widget.currentItem()
+        if item is None:
+            return
+        tex = item.data(Qt.ItemDataRole.UserRole)
+        name = tex.get('name', '')
+        path, _ = QFileDialog.getOpenFileName(
+            parent, "Replace Texture", os.path.expanduser('~'),
+            "Images (*.png *.bmp *.jpg *.jpeg *.tga)")
+        if not path:
+            return
+        qi = QImage(path)
+        if qi.isNull():
+            QMessageBox.warning(parent, "Replace Texture", f"Couldn't read image:\n{path}")
+            return
+        qi = qi.convertToFormat(QImage.Format.Format_RGBA8888)
+        rgba = bytes(qi.bits().asstring(qi.width() * qi.height() * 4))
+        tex['width'], tex['height'], tex['rgba_data'] = qi.width(), qi.height(), rgba
+        tex['format'] = 'RGBA32'
+        textures[name.lower()] = tex
+        self._populate_texture_list_widget(list_widget, textures)
+
+    def _on_rename_texture(self, parent, textures, list_widget): #vers 1
+        """Rename Texture - check the new name doesn't already exist
+        in this TXD before renaming."""
+        item = list_widget.currentItem()
+        if item is None:
+            return
+        tex = item.data(Qt.ItemDataRole.UserRole)
+        old_name = tex.get('name', '')
+        new_name, ok = QInputDialog.getText(
+            parent, "Rename Texture", "New name:", text=old_name)
+        if not ok or not new_name.strip() or new_name.strip() == old_name:
+            return
+        if self._texture_name_exists(textures, new_name, exclude_name=old_name):
+            QMessageBox.warning(parent, "Rename Texture",
+                f'A texture named "{new_name.strip()}" already exists in this TXD.')
+            return
+        textures.pop(old_name.lower(), None)
+        tex['name'] = new_name.strip()
+        textures[new_name.strip().lower()] = tex
+        self._populate_texture_list_widget(list_widget, textures)
+
+    def _save_raw_txd_file(self, txd_name): #vers 1
+        """Export the original, unmodified .txd container bytes for
+        txd_name (Sep 5 2026,  "we also need to extract the
+        .txd file aswell, not just the textures") - straight from the
+        IMG archive, no decode/re-encode, so whatever the alpha/
+        compression/format story turns out to be, this file is
+        exactly what the game itself has."""
+        model_cache = getattr(self._workshop, '_model_cache', None)
+        raw = model_cache.get_raw_txd(txd_name) if model_cache else None
+        if not raw:
+            QMessageBox.warning(self, "Save .txd", f"Couldn't read {txd_name}.txd's raw data.")
+            return
+        start_dir = getattr(self._workshop, '_texlist_folder', '') or os.path.expanduser('~')
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save .txd", os.path.join(start_dir, txd_name + '.txd'), "TXD files (*.txd)")
+        if not path:
+            return
+        try:
+            with open(path, 'wb') as f:
+                f.write(raw)
+            QMessageBox.information(self, "Save .txd", f"Saved {txd_name}.txd to {path}")
+        except OSError as e:
+            QMessageBox.warning(self, "Save .txd", f"Failed to save: {e}")
+
+    def _save_all_textures_to_folder(self, textures, txd_name): #vers 1
+        """Export every texture in `textures` (the same dict passed to
+        _show_texture_thumbnail_strip) as a full-resolution PNG into a
+        folder the user picks. Defaults to the workshop's own
+        Texlist folder if one is set, same convention already used
+        for texture import/export elsewhere in this file."""
+        start_dir = getattr(self._workshop, '_texlist_folder', '') or os.path.expanduser('~')
+        folder = QFileDialog.getExistingDirectory(self, "Save Textures To Folder", start_dir)
+        if not folder:
+            return
+        saved, failed = 0, 0
+        for tex in textures.values():
+            name = tex.get('name', '') or 'texture'
+            rgba = tex.get('rgba_data', b'')
+            w, h = tex.get('width', 0), tex.get('height', 0)
+            if not (rgba and w > 0 and h > 0):
+                failed += 1
+                continue
+            try:
+                qi = QImage(bytes(rgba), w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+                if qi.save(os.path.join(folder, name + '.png')):
+                    saved += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+        msg = f"Saved {saved} texture(s) to {folder}"
+        if failed:
+            msg += f" ({failed} failed)"
+        QMessageBox.information(self, "Save Textures", msg)
 
     def _add_nudge_section(self, title, small_step, large_step, on_nudge): #vers 2
         """One label + << < [value] > >> row per axis (X/Y/Z), using
@@ -4917,7 +1889,7 @@ class _InstanceEditPanel(QWidget):
         self._nav_prev_btn.setVisible(visible)
         self._nav_next_btn.setVisible(visible)
 
-    def show_for_instance(self, inst, loader, nav_info=None, model_cache=None): #vers 3
+    def show_for_instance(self, inst, loader, nav_info=None, model_cache=None): #vers 4
         """Refresh every section for a (possibly new) instance - called
         both when first opening the panel and whenever the selection
         changes (Instance List, or the merged Object Browser), so the
@@ -4946,8 +1918,7 @@ class _InstanceEditPanel(QWidget):
         if obj is not None:
             ide_fields = [str(obj.model_id), obj.model_name, obj.txd_name]
             ide_fields += [str(v) for v in obj.extra.values()]
-            ide_line = (", ".join(ide_fields) +
-                       f"  -  Source {obj.source_ide} (line {obj.line_no})")
+            ide_line = ", ".join(ide_fields)
             txd_name = obj.txd_name
         else:
             ide_line = "(no matching IDE entry found)"
@@ -5126,17 +2097,43 @@ class _InstanceEditPanel(QWidget):
             lines.append(f"{t.model_name} (ID {t.model_id}, {t.source_ide} line {t.line_no}){time_part}")
         QMessageBox.information(self, "TOBJ (Timed Object) Variants", "\n".join(lines))
 
-    def _on_close_clicked(self): #vers 1
-        dock = getattr(self._workshop, '_instance_edit_dock', None)
-        if dock is not None:
-            dock.hide()
-        else:
-            self.hide()
+    def _on_close_clicked(self): #vers 2
+        self.hide()
 
-    def _on_apply_clicked(self): #vers 1
-        QMessageBox.information(self, "Apply",
-            "Position/Rotation/Scale edits already apply live as you\n"
-            "nudge them - there's nothing separate to Apply yet.")
+    def _on_apply_clicked(self): #vers 3
+        """Parse the edited IPL / IDE lines and apply them (undoable)."""
+        inst = self._inst
+        if inst is None:
+            return
+        ws = self._workshop
+        try:
+            p = [x.strip() for x in self._ipl_line_edit.text().split(',')]
+            if len(p) != 13:
+                raise ValueError(f"IPL line needs 13 fields, got {len(p)}")
+            new_inst = {'model_id': int(p[0]), 'model_name': p[1], 'interior': int(p[2]),
+                        'pos_x': float(p[3]), 'pos_y': float(p[4]), 'pos_z': float(p[5]),
+                        'scale_x': float(p[6]), 'scale_y': float(p[7]), 'scale_z': float(p[8]),
+                        'rot_x': float(p[9]), 'rot_y': float(p[10]), 'rot_z': float(p[11]),
+                        'rot_w': float(p[12])}
+        except ValueError as e:
+            QMessageBox.warning(self, "Apply", f"IPL line: {e}")
+            return
+        obj = self._current_ide_obj
+        new_raw = None
+        if obj is not None and self._ide_line_edit.isEnabled():
+            cur = (ws._ide_raw_line(obj) or '').rstrip('\r\n')
+            if self._ide_line_edit.text() != cur:
+                new_raw = self._ide_line_edit.text()
+                err = ws._check_ide_raw(obj, new_raw)
+                if err:
+                    QMessageBox.warning(self, "Apply", f"IDE line: {err}")
+                    return
+        ws._apply_instance_fields(inst, new_inst)
+        if new_raw is not None:
+            ws._apply_ide_raw(obj, new_raw)
+        self._refresh_position_spins()
+        self._refresh_rotation_spins()
+        self._refresh_scale_spins()
 
     def _on_undo_clicked(self): #vers 2
         """Undo/redo for mapping changes (Aug 18 2026)"""
@@ -5145,11 +2142,24 @@ class _InstanceEditPanel(QWidget):
         else:
             self._workshop._map_undo()
 
-    def _on_save_clicked(self): #vers 1
-        QMessageBox.information(self, "Save",
-            "STUB - no write-back infrastructure exists for any file\n"
-            "type in Map Workshop yet (see TODO.md) - edits stay in\n"
-            "memory only, nothing gets written back to disk.")
+    def _on_save_clicked(self): #vers 3
+        """Save this object's IPL (if changed) and its IDE line (if edited)."""
+        inst = self._inst
+        if inst is None:
+            return
+        ws = self._workshop
+        ws._refresh_dirty_ipls()
+        saved = []
+        if inst.source_ipl in ws._dirty_ipls:
+            if not ws._save_ipl_in_place(inst.source_ipl):
+                return
+            saved.append(inst.source_ipl)
+        obj = self._current_ide_obj
+        if obj is not None and obj.model_id in ws._ide_pending:
+            if not ws._save_pending_ide([ws._ide_pending[obj.model_id]]):
+                return
+            saved.append(obj.source_ide)
+        ws._set_status("Saved " + ", ".join(saved) if saved else "Nothing to save for this object")
 
 
 class _FilteredLoaderStub:
@@ -5290,6 +2300,23 @@ class _ObjectBrowserModel(QAbstractTableModel):
             return self._rows[row]
         return None
 
+    def flags(self, index): #vers 1
+        """Rows can be dragged into the viewport to place the model."""
+        f = super().flags(index)
+        return f | Qt.ItemFlag.ItemIsDragEnabled if index.isValid() else f
+
+    def mimeTypes(self): #vers 1
+        return ['application/x-imgfactory-model-id']
+
+    def mimeData(self, indexes): #vers 1
+        """Model ID of the dragged row for DFFViewport.dropEvent."""
+        from PyQt6.QtCore import QMimeData
+        md = QMimeData()
+        obj = self.object_at(indexes[0].row()) if indexes else None
+        if obj is not None:
+            md.setData('application/x-imgfactory-model-id', str(obj.model_id).encode())
+        return md
+
 
 class _InstanceTableModel(QAbstractTableModel):
     """Backs the Instance List QTableView - resolves/formats each row's
@@ -5306,11 +2333,12 @@ class _InstanceTableModel(QAbstractTableModel):
 
     _HEADERS = ["ID", "Model"]
 
-    def __init__(self, instances, loader, parent=None): #vers 2
+    def __init__(self, instances, loader, parent=None, changed_fn=None): #vers 3
         super().__init__(parent)
         self._instances = instances
         self._loader = loader
         self._txd_cache = {}   # model_id -> resolved TXD name, filled lazily
+        self._changed_fn = changed_fn   # inst -> True if edited since last save
 
     def rowCount(self, parent=None): #vers 1
         return len(self._instances)
@@ -5325,17 +2353,15 @@ class _InstanceTableModel(QAbstractTableModel):
             return self._HEADERS[section]
         return str(section + 1)
 
-    def _resolve_txd(self, inst): #vers 1
-        cached = self._txd_cache.get(inst.model_id)
-        if cached is not None:
-            return cached
-        obj = self._loader.get_object(inst.model_id)
-        name = obj.txd_name if obj else ""
-        self._txd_cache[inst.model_id] = name
-        return name
 
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole): #vers 2
-        if role != Qt.ItemDataRole.DisplayRole or not index.isValid():
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole): #vers 3
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if self._changed_fn is not None and self._changed_fn(self._instances[index.row()]):
+                return QBrush(QColor(230, 140, 30))
+            return None
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
         inst = self._instances[index.row()]
         col = index.column()
@@ -5370,59 +2396,178 @@ class _SizeAdaptiveStackedWidget(QStackedWidget):
         return cw.minimumSizeHint() if cw is not None else super().minimumSizeHint()
 
 
-class _VerboseLoadingDialog(QDialog):
-    """Debug loading dialog listing every model as it loads, one line
-    per instance, across a text IPL and each of its associated binary
-    streams in turn."""
+class _IplLoadDialog(QDialog):
+    """One IPL load dialog for single or multiple files: file bar, per-model rows, timed close."""
 
-    def __init__(self, title, parent=None): #vers 3
+    CLOSE_AFTER = 5     # seconds before auto close once finished
+
+    def __init__(self, parent=None, total_files=1): #vers 2
         super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(500, 400)
-        layout = QVBoxLayout(self)
-        self._header_label = QLabel("")
-        header_font = self._header_label.font()
-        header_font.setBold(True)
-        self._header_label.setFont(header_font)
-        layout.addWidget(self._header_label)
-        # Real load-percentage indicator (Aug 20 2026)
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
-        layout.addWidget(self._progress_bar)
-        self._list = QListWidget()
-        layout.addWidget(self._list)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.close)
-        layout.addWidget(close_btn)
         import time as _time
-        self._time_module = _time
+        self._time = _time
+        self.setWindowTitle("Loading IPL")
+        self.resize(600, 440)
+        self.cancelled = False
+        self._finished = False
+        self._total_files = max(1, total_files)
+        self._countdown = self.CLOSE_AFTER
         self._last_pump = 0.0
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self._file_lbl = QLabel("")
+        f = self._file_lbl.font(); f.setBold(True); self._file_lbl.setFont(f)
+        self._bar = QProgressBar(); self._bar.setRange(0, 100)
+        self._files_lbl = QLabel("")
+        top.addWidget(self._file_lbl); top.addWidget(self._bar, 1); top.addWidget(self._files_lbl)
+        lay.addLayout(top)
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["Model", "Progress", "Textures"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(20)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col, width in ((1, 70), (2, 170)):   # fixed: no relayout per row
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self._table.setColumnWidth(col, width)
+        lay.addWidget(self._table, 1)
+        self._msgs = QListWidget(); self._msgs.setMaximumHeight(90); self._msgs.setVisible(False)
+        lay.addWidget(self._msgs)
+        bottom = QHBoxLayout()
+        self._keep = QCheckBox("Keep open"); self._keep.setVisible(False)
+        self._btn = QPushButton("Cancel")
+        self._btn.clicked.connect(self._on_btn)
+        bottom.addWidget(self._keep); bottom.addStretch(); bottom.addWidget(self._btn)
+        lay.addLayout(bottom)
+        self._timer = QTimer(self); self._timer.timeout.connect(self._tick)
+        self.show(); self.raise_()
+        for _ in range(3):              # let the window map and paint first
+            QApplication.processEvents()
 
-    def add_header(self, text): #vers 2
-        self._header_label.setText(text)
-        QApplication.processEvents()   # header changes are rare - always pump immediately
-
-    def set_progress(self, current, total): #vers 1
-        """Real load-percentage indicator (Aug 20 2026)"""
-        pct = int((current / total) * 100) if total > 0 else 0
-        self._progress_bar.setValue(max(0, min(100, pct)))
-        QApplication.processEvents()
-
-    def add_line(self, text): #vers 2
-        self._list.addItem(QListWidgetItem(f"  {text}"))
-        now = self._time_module.monotonic()
-        if now - self._last_pump >= 0.1:
-            self._list.scrollToBottom()
+    def _pump(self, force=False): #vers 2
+        now = self._time.monotonic()
+        if force or now - self._last_pump >= 0.1:
+            self._table.scrollToBottom()
             QApplication.processEvents()
             self._last_pump = now
 
+    def start_file(self, name, idx=0): #vers 1
+        """New IPL: header, Files i/N, empty model list."""
+        self.setWindowTitle(f"Loading {name}")
+        self._file_lbl.setText(f"Loading {name}")
+        self._files_lbl.setText(f"Files {idx + 1}/{self._total_files}")
+        self._bar.setValue(0)
+        self._table.setRowCount(0)
+        self._pump(True)
 
-# Real diagnostic marker (Aug 20 2026) - see __init__'s own docstring
+    def set_file_progress(self, done, total): #vers 1
+        self._bar.setValue(int(done * 100 / total) if total else 100)
+        self._pump()
+
+    def model_row(self, model_name): #vers 2
+        """Add a 'Parsing x.dff' row, return its index."""
+        r = self._table.rowCount()
+        self._table.insertRow(r)
+        self._table.setItem(r, 0, QTableWidgetItem(f"Parsing {model_name}.dff"))
+        self._table.setItem(r, 1, QTableWidgetItem("0%"))
+        self._table.setItem(r, 2, QTableWidgetItem(""))
+        self._pump()
+        return r
+
+    def set_model(self, row, pct, textures=None): #vers 1
+        self._table.item(row, 1).setText(f"{pct}%")
+        if textures is not None:
+            self._table.item(row, 2).setText(textures)
+        self._pump()
+
+    def message(self, text): #vers 1
+        """Warnings, missing files, linked streams."""
+        self._msgs.setVisible(True)
+        self._msgs.addItem(text)
+        self._msgs.scrollToBottom()
+        self._pump()
+
+    def finish(self, summary): #vers 1
+        """Done: full bar, summary, timed close unless Keep open."""
+        self._finished = True
+        self._file_lbl.setText(summary)
+        self._bar.setValue(100)
+        self._keep.setVisible(True)
+        self._btn.setText(f"Close ({self._countdown})")
+        self._timer.start(1000)
+        self._pump(True)
+
+    def file_started(self, path): #vers 1
+        """IMG batch report: archive started (one-window world load)."""
+        self._files_lbl.setText(os.path.basename(path))
+        self._pump()
+
+    def file_done(self, path, img_file): #vers 1
+        """IMG batch report: archive loaded."""
+        n = len(getattr(img_file, 'entries', []) or [])
+        self.message(f"{os.path.basename(path)} - {n:,} entries")
+
+    def file_failed(self, path, message): #vers 1
+        """IMG batch report: archive failed, reason logged."""
+        first = (message or "unknown error").strip().splitlines()[0]
+        self.message(f"{os.path.basename(path)} - FAILED: {first}")
+
+    def file_skipped(self, path, reason): #vers 1
+        """IMG batch report: archive skipped."""
+        self.message(f"{os.path.basename(path)} - skipped: {reason}")
+
+    def show_summary(self, title, summary_text, preloaded_files, seconds=None): #vers 1
+        """World summary in this window; timed close only when seconds set."""
+        self.setWindowTitle(title)
+        self._table.setVisible(False)
+        self._msgs.setMaximumHeight(16777215)
+        self._msgs.setVisible(True)
+        for line in summary_text.splitlines():
+            if line.strip():
+                self._msgs.addItem(line)
+        if preloaded_files:
+            self._msgs.addItem("Preloaded:")
+            self._msgs.addItems([f"    {f}" for f in preloaded_files])
+        if seconds:
+            self._countdown = int(seconds)
+        self.finish(title)
+        if not seconds:
+            self._keep.setChecked(True)
+            self._tick()
+
+    def _tick(self): #vers 1
+        if self._keep.isChecked():
+            self._timer.stop()
+            self._btn.setText("Close")
+            return
+        self._countdown -= 1
+        if self._countdown <= 0:
+            self._timer.stop()
+            self.close()
+            return
+        self._btn.setText(f"Close ({self._countdown})")
+
+    def _on_btn(self): #vers 1
+        if self._finished:
+            self.close()
+            return
+        self.cancelled = True
+        self._btn.setEnabled(False)
+        self._btn.setText("Cancelling...")
+
+    def closeEvent(self, event): #vers 1
+        if not self._finished:
+            self.cancelled = True
+        self._timer.stop()
+        super().closeEvent(event)
+
+
+#  diagnostic marker (Aug 20 2026) - see __init__'s own docstring
 _MODEL_WORKSHOP_INSTANCE_COUNT = 0
 
 
-class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
+class ModelWorkshop(GLViewportMixin, RibbonIconsMixin, ToolMenuMixin, QWidget): #vers 4
     """Model Workshop - Main window"""
 
     # Compact button height for grafted Control Panel widgets
@@ -5480,7 +2625,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     # to QDockWidgets in the same QMainWindow (EXPERIMENTAL, Jul 2026) -
     # user can now freely drag/float/tab any panel, not just ribbons.
     # 3 = Overlays ribbon changed substantially (Aug 21 2026, per
-    # Keith: "the save function for the ribbon manager isn't
+    #  : "the save function for the ribbon manager isn't
     # working, or the config isn't being picked up, when the ribbon
     # manager is called") - Cycle, Undo, and Grge's own show/hide
     # toggle were all added this session, and a dozen separate +X/-X/
@@ -5492,12 +2637,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     # saved, without ever being cleanly rejected as stale the way
     # this version check exists to guarantee. Bumping here forces any
     # such stale save to fall back to the default layout instead.
-    _RIBBON_LAYOUT_VERSION = 3
+    _RIBBON_LAYOUT_VERSION = 4
 
 
     def __init__(self, parent=None, main_window=None): #vers 12
         """initialize_features"""
-        # Real diagnostic marker (Aug 20 2026, per Keith: "we need a
+        #  diagnostic marker (Aug 20 2026,  "we need a
         # marker to show in the terminal for each dialog window,
         # there coming up twice, and loading the img file twice") -
         # module-level counter so a real double-construction (the
@@ -5523,7 +2668,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # Map Workshop settings (separate from global app_settings/theme) -
         # required by the grafted-in Object Browser/Instance List/Editing
         # Panel/World Viewport/Control Panel methods.
-        self.map_settings = MapSettings()
+        self.map_settings = MapSettings.shared()
         # Extra safety net for the debounced save (Aug 18 2026)
 
         app = QApplication.instance()
@@ -5594,7 +2739,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._show_boxes = True
         self._show_mesh = True
 
-        # Real settings, now loaded from self.map_settings (Aug 20
+        #  settings, now loaded from self.map_settings (Aug 20
         # 2026 - same real bug/fix as button_display_mode/fonts
         # above: these lived as ad-hoc self.xxx attributes that Apply
         # updated correctly in-memory but never actually persisted).
@@ -5663,7 +2808,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # exists (Aug 19 2026)
         QTimer.singleShot(0, self._restore_dock_state)
 
-        # Real fix (Aug 20 2026, per Keith: "I've noticed moving icons
+        #  fix (Aug 20 2026,  "I've noticed moving icons
         # to hidden, and save, these movements dont get saved") -
         # _save_toolbar_state was correctly writing the toolbar state
         # (including which icons had been moved to the Hidden toolbar)
@@ -5676,7 +2821,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QTimer.singleShot(0, self._restore_toolbar_state)
 
         # Move the overlay toggle buttons onto the new "Overlays"
-        # ribbon (Aug 20 2026, per Keith: "The New Icons on the IPL
+        # ribbon (Aug 20 2026,  "The New Icons on the IPL
         # Control pane, can be moved to the ribbon") - deferred the
         # same real way as _restore_toolbar_state just above, and for
         # the same real reason: _build_toolbars (where the "Overlays"
@@ -5687,7 +2832,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QTimer.singleShot(0, self._apply_ipl_controls_display_style)
 
         # Auto-load the most recently used game world on startup (Aug
-        # 20 2026, per Keith's own explicit "option 2" choice: "build
+        # 20 2026  own explicit "option 2" choice: "build
         # auto-restore last world on startup, so preload can fire
         # without a manual reload each time" - confirmed still needed
         # by his own follow-up: "nothing about loading preloaded
@@ -5697,6 +2842,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # so this runs after the UI is fully constructed and visible,
         # not blocking the initial show.
         QTimer.singleShot(0, self._auto_load_last_world)
+        self._init_change_tracking()
+        QTimer.singleShot(0, self._apply_gamepad_setting)
 
 
     def setup_ui(self): #vers 14
@@ -5887,42 +3034,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Apply theme colours to all icons now that UI is fully built
         self._refresh_icons()
-        self._connect_all_buttons()
-
-
-    def _connect_all_buttons(self): #vers 2
-        """Wire flip/rotate transform buttons to preview_widget.
-        Called once from setup_ui after all panels are built."""
-        pw = getattr(self, 'preview_widget', None)
-        if not (pw and isinstance(pw, COL3DViewport)):
-            return
-
-        def _safe(btn_name, fn):  #vers 1
-            btn = getattr(self, btn_name, None)
-            if not btn: return
-            try: btn.clicked.disconnect()
-            except Exception: pass
-            btn.clicked.connect(fn)
-
-        _safe('flip_vert_btn',  pw.flip_vertical)
-        _safe('flip_horz_btn',  pw.flip_horizontal)
-        _safe('rotate_cw_btn',  pw.rotate_cw)
-        _safe('rotate_ccw_btn', pw.rotate_ccw)
 
 
     # - Stub implementations (log until fully implemented)
-
-    def _create_new_model(self): #vers 1
-        from PyQt6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "New Model", "Model name:")
-        if not ok or not name.strip(): return
-        from apps.components.Model_Editor.depends.col_workshop_classes import COLModel, COLHeader, COLVersion, COLBounds
-        m = COLModel()
-        m.name = name.strip(); m.version = COLVersion.COL_1
-        if not getattr(self, "current_col_file", None): return
-        self.current_col_file.models.append(m)
-        self._populate_collision_list()
-        self.collision_list.selectRow(self.collision_list.rowCount()-1)
 
 
     def _delete_selected_model(self): #vers 2
@@ -6004,29 +3118,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.collision_list.selectRow(self.collision_list.rowCount()-1)
 
 
-    def _open_surface_paint_dialog(self): #vers 2
-        """Open material paint dialog (delegates to _open_paint_editor)."""
-        self._open_paint_editor()
 
-
-    def _open_dff_material_editor(self, geom_idx=0, mat_idx=0): #vers 2
-        """Alias — opens the unified Material Editor, pre-selecting geom_idx/mat_idx."""
-        self._open_dff_material_list()
-
-
-    def _open_material_list_or_surface_types(self): #vers 1
-        """Toolbar: Material List in DFF mode, Surface Types in COL mode."""
-        if getattr(self, '_dff_adapters', None):
-            self._open_dff_material_list()
-        else:
-            self._open_surface_type_dialog()
-
-    def _open_material_editor_or_surface_edit(self): #vers 1
-        """Toolbar: Material Editor in DFF mode, Surface Editor in COL mode."""
-        if getattr(self, '_dff_adapters', None):
-            self._open_dff_material_editor()
-        else:
-            self._open_surface_edit_dialog()
 
     def _open_dff_material_list(self): #vers 9
 
@@ -6038,10 +3130,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         from PyQt6.QtWidgets import (
             QDialog, QVBoxLayout, QHBoxLayout, QSplitter, QScrollArea,
             QGridLayout, QLabel, QPushButton, QLineEdit, QComboBox,
-            QFrame, QFormLayout, QAbstractItemView, QSizePolicy,
-            QCheckBox, QButtonGroup)
-        from PyQt6.QtGui import QColor, QPixmap, QIcon, QImage, QFont, QPainter, QBrush, QPen, QRadialGradient, QPolygonF
-        from PyQt6.QtCore import Qt as _Qt, QSize as _QS, QRectF
+            QFrame, QFormLayout)
+        from PyQt6.QtGui import QColor, QPixmap, QImage, QFont, QPainter, QBrush, QPen, QRadialGradient, QPolygonF
+        from PyQt6.QtCore import Qt as _Qt, QSize as _QS
 
         model = getattr(self, '_current_dff_model', None)
 
@@ -6704,36 +3795,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         dlg.exec()
 
 
-    def _open_surface_type_dialog(self): #vers 1
-        """Show surface material type picker for selected model."""
-        rows = self.collision_list.selectionModel().selectedRows()
-
-        if not rows or not self.current_col_file: return
-        row = rows[0].row()
-        item = self.collision_list.item(row, 1)
-
-        if not item: return
-        idx = item.data(Qt.ItemDataRole.UserRole)
-
-        if idx is None: return
-        model = self.current_col_file.models[idx]
-        types = {0:"Default",1:"Tarmac",2:"Gravel",3:"Grass",4:"Sand",5:"Water", 6:"Metal",7:"Wood",8:"Concrete",63:"Obstacle"}
-
-        # FUTURE: Add material surface support for GTA3/VC/SA COL export via _dff_to_col_surfaces
-
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget, QDialogButtonBox
-        dlg = QDialog(self); dlg.setWindowTitle(f"Surface Type — {model.name}")
-        lay = QVBoxLayout(dlg)
-        lst = QListWidget()
-
-        for k,v in types.items(): lst.addItem(f"{k:3d}  {v}")
-
-        lay.addWidget(lst)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        lay.addWidget(btns)
-        dlg.exec()
-
 
     def _cycle_view_render_style(self): #vers 3
         """Cycle viewport render: wireframe -> solid -> textured.
@@ -6796,7 +3857,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Cache the full material list for this model's version
         try:
-            from apps.components.Model_Editor.depends.col_materials import get_materials_for_version, COLGame
+            from apps.methods.col_materials import get_materials_for_version, COLGame
             ver     = getattr(getattr(model,'version',None),'value',3) if model else 3
             game    = COLGame.VC if ver == 1 else COLGame.SA
             self._paint_mat_list = get_materials_for_version(game, include_procedural=True)
@@ -6833,7 +3894,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         Closes on item click, X button, or focus loss."""
         from PyQt6.QtWidgets import (QListWidget, QListWidgetItem, QFrame,
                                      QVBoxLayout, QHBoxLayout, QLineEdit,
-                                     QPushButton, QLabel)
+                                     QPushButton)
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QColor
 
@@ -6988,84 +4049,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             vp.update()
         self._set_status(f"Paint material: {mat_id} — {name}")
 
-    def _show_paint_toolbar(self, mat_id: int, model=None): #vers 5
-        """Populate combo then show the floating paint bar."""
-        tb    = self.paint_toolbar
-        combo = self.paint_mat_combo
-        if not tb or not combo:
-            return  # not built yet
-
-        # Populate material combo
-        try:
-            from apps.components.Model_Editor.depends.col_materials import get_materials_for_version, COLGame, get_material_colour
-            ver = getattr(getattr(model, 'version', None), 'value', 3) if model else 3
-            game = COLGame.VC if ver == 1 else COLGame.SA
-            all_mats = get_materials_for_version(game, include_procedural=True)
-        except Exception:
-            all_mats = [(i, f"Material {i}", "808080") for i in range(10)]
-
-        from PyQt6.QtGui import QPixmap, QColor, QIcon
-        from PyQt6.QtCore import Qt as _Qt
-
-        def _make_swatch_icon(hex_col: str) -> QIcon:  #vers 1
-            """16×16 filled square icon for combo items."""
-            px = QPixmap(16, 16)
-            px.fill(QColor(f"#{hex_col}"))
-            return QIcon(px)
-
-        def _apply_swatch(hex_col: str):  #vers 1
-            """Update the standalone swatch label colour."""
-            sw = getattr(self, 'paint_swatch', None)
-            if sw:
-                sw.setStyleSheet(
-                    f"background:#{hex_col}; border:2px solid #888; border-radius:3px;")
-                sw.setToolTip(f"Colour: #{hex_col.upper()}")
-
-        combo.blockSignals(True)
-        combo.clear()
-        sel_idx = 0
-        for i, (mid, name, hex_col) in enumerate(all_mats):
-            icon = _make_swatch_icon(hex_col)
-            combo.addItem(icon, f"{mid:3d}  {name}", mid)
-            if mid == mat_id:
-                sel_idx = i
-                _apply_swatch(hex_col)
-        combo.setIconSize(QSize(16, 16))
-        combo.setCurrentIndex(sel_idx)
-        combo.blockSignals(False)
-
-        # Update viewport + swatch when material changes
-        try:
-            combo.currentIndexChanged.disconnect()
-        except Exception:
-            pass
-
-        # Build a quick hex_col lookup by mat_id
-        _col_map = {mid: hx for mid, _, hx in all_mats}
-
-        def _on_mat_changed(idx):  #vers 1
-            new_mid = combo.itemData(idx)
-            if new_mid is None:
-                return
-            self._paint_active_mat = new_mid
-            vp = getattr(self, 'preview_widget', None)
-            if vp:
-                vp._paint_material = new_mid
-                vp.update()
-            _apply_swatch(_col_map.get(new_mid, "808080"))
-            self._set_status(f"Paint material: {new_mid}")
-
-        combo.currentIndexChanged.connect(_on_mat_changed)
-
-        # Enable undo button only if undo stack has entries
-        if undo_btn:
-            undo_btn.setEnabled(bool(getattr(self, 'undo_stack', [])))
-
-        # Trigger viewport repaint to show the paint overlay chips
-        vp = getattr(self, 'preview_widget', None)
-        if vp:
-            vp.update()
-
 
     def _on_painted_face(self, face_index, face): #vers 2
         """Called by viewport when a face is painted. Status update only —
@@ -7099,7 +4082,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         tool_names = {'paint': 'Paint', 'dropper': 'Dropper (pick material)', 'fill': 'Fill (same material)'}
         self._set_status(f"Tool: {tool_names.get(mode, mode)}")
 
-    def _exit_paint_mode(self): #vers 2
+    def _exit_paint_mode(self): #vers 3
         """Exit paint mode — hide toolbar, restore paint button."""
         # Close material popup if open
         old_popup = getattr(self, '_mat_popup', None)
@@ -7109,7 +4092,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._mat_popup = None
 
         vp = getattr(self, 'preview_widget', None)
-        if vp:
+        if vp and getattr(vp, '_paint_mode', False):
             vp.set_paint_mode(False)
             vp.on_face_selected = None
 
@@ -7181,8 +4164,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "No File", "Load a COL file first.")
             return
-        from apps.components.Model_Editor.depends.col_workshop_classes import COLModel, COLHeader, COLBounds, COLVersion
-        from apps.components.Model_Editor.depends.col_core_classes import Vector3
+        from apps.methods.col_workshop_classes import COLModel, COLHeader, COLBounds, COLVersion
+        from apps.methods.col_workshop_classes import Vector3
         hdr = COLHeader(fourcc=b'COLL', size=0, name='new_model',
                         model_id=0, version=COLVersion.COL_1)
         bnd = COLBounds(radius=1.0, center=Vector3(0,0,0),
@@ -7198,72 +4181,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if active.rowCount() > new_row:
             active.selectRow(new_row)
 
-    def _open_surface_edit_dialog(self): #vers 2
-        """Open the COL Mesh Editor for the currently selected model."""
-        try:
-            from apps.components.Col_Editor.col_mesh_editor import open_col_mesh_editor
-            open_col_mesh_editor(self, parent=self)
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Mesh Editor Error", str(e))
-    def _build_col_from_txd(self): #vers 2
-        """Create stub COL models for each texture name in a loaded TXD."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
-        from apps.components.Model_Editor.depends.col_workshop_classes import COLModel, COLVersion, COLBounds
-        txd_path, _ = QFileDialog.getOpenFileName(
-            self, "Select TXD file", "", "TXD Files (*.txd);;All Files (*)")
-        if not txd_path:
-            return
-        try:
-            import os
-            # Extract texture names from TXD (scan for null-terminated strings after each 0x15 chunk)
-            import struct
-            names = []
-            with open(txd_path, 'rb') as f:
-                data = f.read()
-            pos = 0
-            while pos < len(data) - 12:
-                t, s, v = struct.unpack_from('<III', data, pos)
-                if t == 0x15 and pos + 12 + 12 < len(data):
-                    body = pos + 12 + 12
-                    name = data[body+8:body+40].rstrip(b'').decode('ascii','ignore').strip()
-                    if name:
-                        names.append(name)
-                pos += 12 + s if s > 0 else 1
-            if not names:
-                QMessageBox.warning(self, "No Textures", "No texture names found in TXD.")
-                return
-            if not getattr(self, "current_col_file", None):
-                from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
-                self.current_col_file = COLFile()
-                self.current_col_file.models = []
-            added = 0
-            for name in names:
-                m = COLModel()
-                m.name = name
-                m.version = COLVersion.COL_2
-                m.spheres = []; m.boxes = []; m.vertices = []; m.faces = []
-                m.shadow_verts = []; m.shadow_faces = []
-                bounds = COLBounds()
-                bounds.min = type('V', (), {'x': -1.0, 'y': -1.0, 'z': -1.0})()
-                bounds.max = type('V', (), {'x':  1.0, 'y':  1.0, 'z':  1.0})()
-                bounds.center = type('V', (), {'x': 0.0, 'y': 0.0, 'z': 0.0})()
-                bounds.radius = 1.73
-                m.bounds = bounds; m.model_id = 0
-                self.current_col_file.models.append(m)
-                added += 1
-            self._populate_collision_list()
-            self._populate_compact_col_list()
-            msg = f"Created {added} stub COL model(s) from {os.path.basename(txd_path)}"
-            self._set_status(msg)
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                self.main_window.log_message(msg)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
 
-    def _dff_to_col_surfaces(self, single=True): #vers 1
+    def _dff_to_col_surfaces(self, single=True): #vers 2
         """Generate COL from DFF model — maps texture names to COL surface types.
         single=True: one COL model from currently loaded DFF.
         single=False: batch — pick a directory of DFF files.
@@ -7305,7 +4224,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     return sid
             return 0  # default
 
-        def _surface_label(sid: int) -> str:  #vers 1
+        def _surface_label(sid: int) -> str:  #vers 2
             for _, (s, lbl) in SURFACE_MAP:
                 if s == sid:
                     return lbl
@@ -7422,13 +4341,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
 
         # - Build COL models
-        from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
-        from apps.components.Model_Editor.depends.col_workshop_classes import (COLModel, COLVersion, COLBounds,
-                                                        COLFace, COLVertex, COLMaterial)
-        import struct, os
+        from apps.methods.col_workshop_loader import COLFile
+        from apps.methods.col_workshop_classes import (
+            COLModel, COLHeader, COLVersion, COLBounds, COLFace, COLVertex)
+        from apps.methods.col_workshop_classes import Vector3
+        import os
 
         col_ver_map = [COLVersion.COL_1, COLVersion.COL_2, COLVersion.COL_3]
         col_ver = col_ver_map[col_version.currentIndex()]
+        fourcc = {COLVersion.COL_1: b'COLL', COLVersion.COL_2: b'COL2',
+                  COLVersion.COL_3: b'COL3'}[col_ver]
 
         if not getattr(self, "current_col_file", None):
             self.current_col_file = COLFile()
@@ -7436,56 +4358,22 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         added = 0
         for model_name, tex_name, sp_widget, geom in row_data:
-            surface_id = sp_widget.currentData()
-            m = COLModel()
-            m.name    = os.path.splitext(model_name)[0]
-            m.version = col_ver
-            m.spheres = []; m.boxes = []
-
-            # Bounds from DFF geometry
-            try:
-                bs = geom.bounding_sphere
-                mn = type('V',(),{'x':bs.center.x-bs.radius,'y':bs.center.y-bs.radius,'z':bs.center.z-bs.radius})()
-                mx = type('V',(),{'x':bs.center.x+bs.radius,'y':bs.center.y+bs.radius,'z':bs.center.z+bs.radius})()
-                ctr= type('V',(),{'x':bs.center.x,'y':bs.center.y,'z':bs.center.z})()
-            except Exception:
-                mn =type('V',(),{'x':-1.0,'y':-1.0,'z':-1.0})()
-                mx =type('V',(),{'x': 1.0,'y': 1.0,'z': 1.0})()
-                ctr=type('V',(),{'x': 0.0,'y': 0.0,'z': 0.0})()
-
-            bounds = COLBounds()
-            bounds.min = mn; bounds.max = mx
-            bounds.center = ctr
-            try:
-                bounds.radius = geom.bounding_sphere.radius
-            except Exception:
-                bounds.radius = 1.73
-            m.bounds = bounds; m.model_id = 0
-
-            # Mesh faces
-            if use_mesh.isChecked() and hasattr(geom, 'vertices') and geom.vertices:
-                mat_obj = COLMaterial()
-                mat_obj.material_id = surface_id
-                mat_obj.flag = 0; mat_obj.brightness = 0; mat_obj.light = 0
-
-                verts = []
-                for v in geom.vertices:
-                    cv = COLVertex(); cv.x = v.x; cv.y = v.y; cv.z = v.z
-                    verts.append(cv)
-                m.vertices = verts
-
-                faces = []
-                for tri in geom.triangles:
-                    cf = COLFace()
-                    cf.v1 = tri.v1; cf.v2 = tri.v2; cf.v3 = tri.v3
-                    cf.material = mat_obj
-                    faces.append(cf)
-                m.faces = faces
-                m.shadow_verts = []; m.shadow_faces = []
-            else:
-                m.vertices = []; m.faces = []
-                m.shadow_verts = []; m.shadow_faces = []
-
+            surface_id = sp_widget.currentData() or 0
+            bs = getattr(geom, 'bounding_sphere', None)
+            r = float(getattr(bs, 'radius', 0.0) or 1.73)
+            c = getattr(bs, 'center', None)
+            cx, cy, cz = (c.x, c.y, c.z) if c is not None else (0.0, 0.0, 0.0)
+            hdr = COLHeader(fourcc=fourcc, size=0, name=os.path.splitext(model_name)[0][:21],
+                            model_id=0, version=col_ver)
+            bnd = COLBounds(radius=r, center=Vector3(cx, cy, cz),
+                            min=Vector3(cx - r, cy - r, cz - r), max=Vector3(cx + r, cy + r, cz + r))
+            verts, faces = [], []
+            if use_mesh.isChecked() and getattr(geom, 'vertices', None):
+                verts = [COLVertex(v.x, v.y, v.z) for v in geom.vertices]
+                faces = [COLFace(t.v1, t.v2, t.v3, surface_id, 0, 0, 0)
+                         for t in getattr(geom, 'triangles', [])]
+            m = COLModel(header=hdr, bounds=bnd, spheres=[], boxes=[],
+                         vertices=verts, faces=faces)
             self.current_col_file.models.append(m)
             added += 1
 
@@ -7498,18 +4386,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.main_window.log_message(msg)
 
 
-    def _cycle_render_mode(self): #vers 1
-        modes = ['wireframe','solid','painted']
-        cur   = getattr(self, '_render_mode', 'wireframe')
-        self._render_mode = modes[(modes.index(cur)+1) % len(modes)] if cur in modes else 'wireframe'
-        if hasattr(self, 'preview_widget') and self.preview_widget:
-            self.preview_widget._refresh()
-
 
     def _convert_surface(self): #vers 2
         """Convert selected model to a different COL version."""
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QMessageBox
-        from apps.components.Model_Editor.depends.col_workshop_classes import COLVersion
+        from apps.methods.col_workshop_classes import COLVersion
         model = self._get_selected_model()
         if not model:
             QMessageBox.warning(self, "No Selection", "Select a collision model first.")
@@ -7540,14 +4421,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         dlg.exec()
 
 
-    def _show_shadow_mesh(self): #vers 2
+    def _show_shadow_mesh(self): #vers 3
         """Show shadow mesh info for selected model."""
         from PyQt6.QtWidgets import QMessageBox
         model = self._get_selected_model()
         if not model:
             QMessageBox.warning(self, "No Selection", "Select a collision model first.")
             return
-        sv = len(getattr(model, 'shadow_verts', []))
+        sv = len(getattr(model, 'shadow_vertices', []))
         sf = len(getattr(model, 'shadow_faces', []))
         if sv == 0 and sf == 0:
             QMessageBox.information(self, "Shadow Mesh",
@@ -7561,82 +4442,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 "Shadow mesh is included in COL3 export.")
 
 
-    def _create_shadow_mesh(self): #vers 2
-        """Auto-generate shadow mesh as a copy of the main collision mesh."""
-        from PyQt6.QtWidgets import QMessageBox
-        import copy
-        model = self._get_selected_model()
-        if not model:
-            QMessageBox.warning(self, "No Selection", "Select a collision model first.")
-            return
-        if not model.vertices or not model.faces:
-            QMessageBox.warning(self, "No Mesh", f"'{model.name}' has no vertex/face data.")
-            return
-        # Upgrade to COL3 if needed
-        from apps.components.Model_Editor.depends.col_workshop_classes import COLVersion
-        if getattr(model.version, 'value', 0) < 3:
-            reply = QMessageBox.question(self, "Upgrade to COL3",
-                "Shadow mesh requires COL3. Upgrade this model?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-            model.version = COLVersion.COL_3
-        model.shadow_verts = copy.deepcopy(model.vertices)
-        model.shadow_faces = copy.deepcopy(model.faces)
-        self._populate_collision_list()
-        self._populate_compact_col_list()
-        msg = (f"Shadow mesh created for {model.name}: "
-               f"{len(model.shadow_verts)}V {len(model.shadow_faces)}F")
-        self._set_status(msg)
-        if self.main_window and hasattr(self.main_window, 'log_message'):
-            self.main_window.log_message(msg)
-
-
-    def _remove_shadow_mesh(self): #vers 2
-        """Remove shadow mesh data from the selected COL model."""
-        from PyQt6.QtWidgets import QMessageBox
-        model = self._get_selected_model()
-        if not model:
-            QMessageBox.warning(self, "No Selection", "Select a collision model first.")
-            return
-        has_shadow = bool(getattr(model, 'shadow_verts', []) or getattr(model, 'shadow_faces', []))
-        if not has_shadow:
-            QMessageBox.information(self, "No Shadow Mesh", f"{model.name} has no shadow mesh.")
-            return
-        reply = QMessageBox.question(self, "Remove Shadow Mesh",
-            f"Remove shadow mesh from '{model.name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            model.shadow_verts = []
-            model.shadow_faces = []
-            self._set_status(f"Removed shadow mesh from {model.name}")
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                self.main_window.log_message(f"Shadow mesh removed from {model.name}")
-
-
-    def _compress_col(self): #vers 2
-        """Mark COL file for compressed output (sets flags on export)."""
-        from PyQt6.QtWidgets import QMessageBox
-        if not getattr(self, "current_col_file", None):
-            QMessageBox.warning(self, "No File", "No COL file loaded.")
-            return
-        QMessageBox.information(self, "COL Compression",
-            "COL files do not use zlib/LZO compression internally.\n\n"
-            "To reduce size: remove unused models, clear shadow meshes,\n"
-            "or reduce vertex/face counts in the mesh editor.")
-
-
-    def _uncompress_col(self): #vers 2
-        """Reload COL file (parses fresh from disk, clears in-memory edits)."""
-        from PyQt6.QtWidgets import QMessageBox
-        if not self.current_col_file or not getattr(self, 'current_file_path', None):
-            QMessageBox.warning(self, "No File", "No COL file loaded.")
-            return
-        reply = QMessageBox.question(self, "Reload File",
-            "Reload from disk? Unsaved changes will be lost.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            self._open_file(self.current_file_path)
 
 
 
@@ -7644,8 +4449,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     # - Method aliases — drop Qt signal args (*_, **__) before forwarding
     # These are called from Qt signals that pass e.g. bool(checked) as arg.
     # Target methods take only self, so we must not forward the signal args.
-    def _compress_surface(self, *_, **__): #vers 1
-        return self._compress_col()
 
     def _copy_surface(self, *_, **__): #vers 1
         return self._copy_model_to_clipboard()
@@ -7659,8 +4462,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _force_save_col(self, *_, **__): #vers 1
         return self._save_file()
 
-    def _import_selected(self, *_, **__): #vers 1
-        return self._import_col_data()
 
     def _import_surface(self, *_, **__): #vers 1
         return self._import_col_data()
@@ -7677,8 +4478,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _reload_surface_table(self, *_, **__): #vers 1
         return self._populate_collision_list()
 
-    def _remove_shadow(self, *_, **__): #vers 1
-        return self._remove_shadow_mesh()
 
     def _save_as_col_file(self, *_, **__): #vers 1
         return self._save_file()
@@ -7689,8 +4488,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _saveall_file(self, *_, **__): #vers 1
         return self._save_file()
 
-    def _uncompress_surface(self, *_, **__): #vers 1
-        return self._uncompress_col()
 
     def export_all(self, *_, **__): #vers 1
         return self._export_col_data()
@@ -7713,19 +4510,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def save_col_file(self, *a, **kw): #vers 1
         return self._save_file(*a, **kw)
 
-    def shadow_dialog(self, *a, **kw): #vers 1
-        return self._create_shadow_mesh(*a, **kw)
-
-    def switch_surface_view(self, *a, **kw): #vers 1
-        return self._cycle_render_mode(*a, **kw)
 
 
-    def _change_format(self, *a, **kw): pass  #vers 1
-    def _close_col_tab(self, *a, **kw): pass  #vers 1
-    def _edit_main_surface(self, *a, **kw): pass  #vers 1
     def _focus_search(self, *a, **kw): pass  #vers 1
     def _rename_shadow_shortcut(self, *a, **kw): pass  #vers 1
-    def _save_surface_name(self, *a, **kw): pass  #vers 1
     def _show_detailed_info(self, *a, **kw): pass  #vers 1
     def _show_surface_info(self, *a, **kw): pass  #vers 1
     def show_help(self, *a, **kw): pass  #vers 1
@@ -7880,7 +4668,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.status_label = QLabel("Ready")
         layout.addWidget(self.status_label)
 
-        # Zoom level, left of memory usage (Aug 20 2026, per Keith:
+        # Zoom level, left of memory usage (Aug 20 2026, .per:
         # "a zoom value display left of the memory usage on the
         # status bar, for the viewpoint")
         layout.addStretch()
@@ -7904,7 +4692,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _update_zoom_status_label(self): #vers 1
         """Refresh the status bar's zoom label (Aug 20 2026, per
-        Keith: "a zoom value display left of the memory usage on the
+         : "a zoom value display left of the memory usage on the
         status bar, for the viewpoint") - reads the viewport's own
         real camera-distance-from-target value (self._dist), the same
         real quantity every zoom in/out/wheel action already changes,
@@ -8046,6 +4834,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Sync mini toolbar visibility with current dock state
         self._sync_middle_btn_row_visibility()
+        self._apply_custom_icons()
 
     def _sync_middle_btn_row_visibility(self): #vers 2
         """Show/hide the mini toolbar's action icons (Open/Save/Import/
@@ -8078,7 +4867,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         btn = getattr(self, 'menu_btn', None)
         if btn: menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 
-    def _build_workshop_settings_tabs(self): #vers 1
+    def _texture_limits(self): #vers 1
+        """Per-format texture limits {group: (over, down_to)} from settings."""
+        ms = self.map_settings
+        limits = {}
+        if ms.get('texture_downscale_enabled'):
+            limits['rw'] = (ms.get('texture_downscale_threshold'), ms.get('texture_downscale_target'))
+        for g in ('iv', 'stories', 'nif'):
+            if ms.get(f'tex_limit_{g}_on'):
+                limits[g] = (ms.get(f'tex_limit_{g}_over'), ms.get(f'tex_limit_{g}_to'))
+        return limits
+
+    def _build_workshop_settings_tabs(self): #vers 9
         """Build the workshop settings QTabWidget (Fonts/Display/
         Performance/Preview/Loading/Map Assets/Navigation) and the
         Apply callback that reads all their widgets back and
@@ -8226,7 +5026,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         button_group.setLayout(button_layout)
         display_layout.addWidget(button_group)
 
-        # IPL Controls display style (Aug 20 2026, per Keith: "we
+        # IPL Controls display style (Aug 20 2026,  "we
         # could add a toggle in settings, Show IPL Controls = as
         # [Buttons] or ribbon icons") - a separate, real toggle from
         # the general "Button Display Mode" combo just above, since
@@ -8510,7 +5310,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         grid_type_combo = QComboBox()
         grid_type_items = [
             ('lines',            'Lines (default)'),
-            # ('squares',          'Squares (blue fill)'),  # Temporarily disabled (Aug 20 2026, per Keith: "remove the square (blue fill) entry, temp comment it out if possible. So that function doesn't affect testing") - kept as its own entry, since Keith's own request was to comment it out rather than delete it, in case it's needed again later.
+            # ('squares',          'Squares (blue fill)'),  # Temporarily disabled (Aug 20 2026,  "remove the square (blue fill) entry, temp comment it out if possible. So that function doesn't affect testing") - kept as its own entry, since my own request was to comment it out rather than delete it, in case it's needed again later.
             ('dashed',           'Marching ants (dashed)'),
             ('dots',             'Dots only'),
             ('honeycomb',        'Honeycomb (hexagons)'),
@@ -8665,7 +5465,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "generated radar/minimap tiles. Off by default.")
         radar_form.addRow(radar_show_grid_chk)
 
-        # radar_tex_layer_chk removed (Aug 20 2026, per Keith: "moving
+        # radar_tex_layer_chk removed (Aug 20 2026,  "moving
         # the Radar settings from the settings, to the button would
         # follow the pattern of the other buttons, leaving the
         # settings, for those buttons in the map_workshop settings") -
@@ -8728,14 +5528,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         timecyc_path_edit.setReadOnly(True)
         timecyc_path_edit.setPlaceholderText("Auto-detected next to the loaded game's own data folder, if found")
         timecyc_browse_btn = QPushButton("Browse…")
-        def _browse_timecyc(): #vers 1
+        def _browse_timecyc(): #vers 2
             path, _ = QFileDialog.getOpenFileName(
                 self, "Choose Timecyc File", "", "Timecyc (*.dat)")
             if path:
                 timecyc_path_edit.setText(path)
                 vp = getattr(self, 'preview_widget', None)
                 if vp is not None and hasattr(vp, 'set_timecyc_path'):
-                    vp.set_timecyc_path(path)
+                    known_game = getattr(getattr(self, '_world_loader', None), 'game', None)
+                    vp.set_timecyc_path(path, known_game=known_game)
         timecyc_browse_btn.clicked.connect(_browse_timecyc)
         timecyc_row = QHBoxLayout()
         timecyc_row.addWidget(timecyc_path_edit)
@@ -8762,7 +5563,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         water_path_edit.setPlaceholderText("Not found - Browse to point at it directly")
         water_browse_btn = QPushButton("Browse…")
         water_browse_btn.setToolTip(
-            "Per Keith: \"the waterpro.dat is in gameroot/data/waterpro.\n"
+            "Per  : \"the waterpro.dat is in gameroot/data/waterpro.\n"
             "dat; if it's not found, ask for it, [browse] with the path\n"
             "to where the waterpro.dat is.\" Manually point at a real\n"
             "water.dat or waterpro.dat if auto-detection (the game's\n"
@@ -8843,7 +5644,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         render_layout.addWidget(boxes_grp)
         render_layout.addWidget(radar_grp)
         # water_grp (the old, settings-driven group) disconnected (Aug
-        # 20 2026, re-applied per Keith's own "get water working"
+        # 20 2026, re-applied per my own "get water working"
         # priority) - widget still built above (harmless, just not
         # shown) so this can be reused or fully removed later once
         # the new preload-driven water is confirmed solid.
@@ -8864,7 +5665,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         water2_tex_path_edit.setPlaceholderText("Auto: the loaded game's own particle.txd water texture")
         water2_tex_browse_btn = QPushButton("Browse...")
         def _browse_water2_texture(): #vers 2
-            """Real fix (Aug 20 2026, per Keith: "the option settings
+            """ fix (Aug 20 2026,  "the option settings
             path for using other water textures") - a manually-chosen
             custom texture is a deliberate, explicit choice, so it
             takes priority over the automatic particle.txd extraction
@@ -8928,14 +5729,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         water2_y_spin.setToolTip("Same real request as X offset above.")
         water2_form.addRow("Y offset:", water2_y_spin)
 
-        water2_vc_only_chk = QCheckBox("Apply X/Y offset to VC only")
-        water2_vc_only_chk.setChecked(bool(self.map_settings.get('water2_offset_vc_only')))
-        water2_vc_only_chk.setToolTip(
-            "On: X/Y offset applies to VC only (LC/SA already align).\n"
-            "Off: applies the offset regardless of game.")
-        water2_form.addRow(water2_vc_only_chk)
+        water2_mode_combo = QComboBox()
+        for label, key in (("VC only", 'vc'), ("All games", 'all'), ("Off", 'off')):
+            water2_mode_combo.addItem(label, key)
+        water2_mode_combo.setCurrentIndex(
+            max(0, water2_mode_combo.findData(self._water2_offset_mode())))
+        water2_mode_combo.setToolTip(
+            "Radar/water fix - when the X/Y offset applies.\n"
+            "VC only: PC Vice City (-400 X).  Off: LCS ports, LC, SA.")
+        water2_form.addRow("Radar/water fix:", water2_mode_combo)
 
-        # Real fix (Aug 20 2026, per Keith: "Change it by 20+ on the
+        #  fix (Aug 20 2026,  "Change it by 20+ on the
         # height in settings, doesn't update the view") - these two
         # only ever applied on Apply/OK before; live updates as the
         # spinbox itself changes make far more sense for a "not sure
@@ -8962,18 +5766,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         water2_alpha_spin.valueChanged.connect(_live_water2_alpha)
         water2_x_spin.valueChanged.connect(_live_water2_x)
         water2_y_spin.valueChanged.connect(_live_water2_y)
-        def _live_water2_vc_only(checked): #vers 1
+        def _live_water2_mode(_idx): #vers 2
             vp_live = getattr(self, 'preview_widget', None)
-            if vp_live is not None and hasattr(vp_live, 'set_water2_offset_vc_only'):
-                vp_live.set_water2_offset_vc_only(checked)
-        water2_vc_only_chk.toggled.connect(_live_water2_vc_only)
+            if vp_live is not None and hasattr(vp_live, 'set_water2_offset_mode'):
+                vp_live.set_water2_offset_mode(water2_mode_combo.currentData())
+        water2_mode_combo.currentIndexChanged.connect(_live_water2_mode)
 
         render_layout.addWidget(water2_grp)
 
-        # Audio Streams (Aug 20 2026, per Keith: "i can send you the
+        # Audio Streams (Aug 20 2026,  "i can send you the
         # sounds, would that help") - real, working extraction from
         # SA's own real "audio stream" file format (AMBIENCE, GENRL,
-        # radio station files) confirmed against Keith's own real,
+        # radio station files) confirmed against my own real,
         # uploaded AMBIENCE file (documented XOR key + track header
         # from GTAMods, verified via ffprobe: extracted tracks are
         # fully valid Ogg Vorbis, probe_score=100).
@@ -9012,6 +5816,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         render_layout.addWidget(env_grp)
         render_layout.addStretch()
         tabs.addTab(render_tab_outer, "Render")
+
+        # - World tab (Oct 12 2026): grid/radar, water, environment, audio
+        world_scroll = QScrollArea()
+        world_scroll.setWidgetResizable(True)
+        world_tab = QWidget()
+        world_layout = QVBoxLayout(world_tab)
+        world_layout.setSpacing(6)
+        for _grp in (radar_grp, water2_grp, env_grp, audio_grp):
+            world_layout.addWidget(_grp)
+        world_layout.addStretch()
+        world_scroll.setWidget(world_tab)
+        tabs.addTab(world_scroll, "World")
 
         # TAB 3: placeholder
         # TAB 4: PERFORMANCE
@@ -9052,7 +5868,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         perf_layout.addWidget(cache_group)
 
         perf_layout.addStretch()
-        tabs.addTab(perf_tab, "Performance")
 
         # TAB 5: PREVIEW SETTINGS (LAST TAB)
 
@@ -9169,13 +5984,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         preview_layout.addWidget(overlay_group)
 
         preview_layout.addStretch()
-        tabs.addTab(preview_tab, "Preview")
+        for _grp in (zoom_group, bg_group, overlay_group):   # Preview merged into Display
+            display_layout.insertWidget(display_layout.count() - 1, _grp)
 
         # - Loading tab (Aug 1 2026)
         loading_tab = QWidget()
         ld_lay = QVBoxLayout(loading_tab)
         ld_form = QFormLayout()
         ld_form.setSpacing(8)
+        ld_grid = QGridLayout()          # short checkboxes two per row
+        ld_grid.setHorizontalSpacing(24)
 
         load_streams_chk = QCheckBox("Load Text plus Binary IPL set")
         load_streams_chk.setChecked(self.map_settings.get('load_text_plus_binary_ipl_set'))
@@ -9184,7 +6002,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "its known associated binary stream files - many text IPLs\n"
             "are mostly LOD content, with the normal-detail models\n"
             "living in their streams instead.")
-        ld_form.addRow(load_streams_chk)
 
         preload_img_chk = QCheckBox("Preload IMG archives on DAT load")
         preload_img_chk.setChecked(self.map_settings.get('preload_img_on_dat_load'))
@@ -9195,7 +6012,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "of time. Trades a longer upfront wait for faster per-IPL\n"
             "model/texture loading afterward - off by default since\n"
             "it's not always a net win.")
-        ld_form.addRow(preload_img_chk)
 
         show_load_options_chk = QCheckBox("Show Load Options dialog on world load")
         show_load_options_chk.setChecked(self.map_settings.get('show_load_options_dialog', True))
@@ -9207,14 +6023,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "load individual IPLs later via their eye icon in IPL\n"
             "Sections, the same as picking \"Load from .dat file\" in\n"
             "that dialog would.")
-        ld_form.addRow(show_load_options_chk)
 
         auto_load_last_world_chk = QCheckBox("Auto-load last world on startup")
         auto_load_last_world_chk.setChecked(self.map_settings.get('auto_load_last_world', True))
         auto_load_last_world_chk.setToolTip(
             "Automatically reloads the most recently used game .dat\n"
             "file when Map Workshop opens.")
-        ld_form.addRow(auto_load_last_world_chk)
 
         auto_dismiss_summary_chk = QCheckBox("Auto-dismiss the load summary dialog")
         auto_dismiss_summary_chk.setChecked(self.map_settings.get('auto_dismiss_summary_dialog', False))
@@ -9233,44 +6047,73 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         verbose_loading_chk = QCheckBox("Show Full Loading Models (Debug)")
         verbose_loading_chk.setChecked(self.map_settings.get('show_verbose_loading_dialog'))
+        for _i, _chk in enumerate((load_streams_chk, preload_img_chk, show_load_options_chk,
+                                   auto_load_last_world_chk)):
+            ld_grid.addWidget(_chk, _i // 2, _i % 2)
+        ld_lay.addLayout(ld_grid)
         verbose_loading_chk.setToolTip(
             "Show a scrolling debug dialog listing every model as it\n"
             "loads, one line per instance.")
         ld_form.addRow(verbose_loading_chk)
-
-        ld_form.addRow(QLabel(""))
-        ld_form.addRow(QLabel("—  Texture size limit  —"))
-
-        downscale_chk = QCheckBox("Reduce large textures")
-        downscale_chk.setChecked(self.map_settings.get('texture_downscale_enabled'))
-        downscale_chk.setToolTip(
-            "Reduce any texture larger than the threshold below down\n"
-            "to the target size before uploading it to the GPU - saves\n"
-            "significant VRAM on maps with many large textures, at a\n"
-            "quality cost for those specific textures.")
-        ld_form.addRow(downscale_chk)
-
-        downscale_threshold_spin = QSpinBox()
-        downscale_threshold_spin.setRange(64, 4096)
-        downscale_threshold_spin.setSingleStep(64)
-        downscale_threshold_spin.setValue(self.map_settings.get('texture_downscale_threshold'))
-        downscale_threshold_spin.setToolTip("Textures larger than this (in either dimension) get reduced")
-        ld_form.addRow("Reduce anything over:", downscale_threshold_spin)
-
-        downscale_target_spin = QSpinBox()
-        downscale_target_spin.setRange(16, 2048)
-        downscale_target_spin.setSingleStep(64)
-        downscale_target_spin.setValue(self.map_settings.get('texture_downscale_target'))
-        downscale_target_spin.setToolTip("Size to reduce large textures down to")
-        ld_form.addRow("Reduce down to:", downscale_target_spin)
+        import os as _os
+        _cores = _os.cpu_count() or 1
+        workers_spin = QSpinBox()
+        workers_spin.setRange(0, _cores)
+        workers_spin.setSpecialValueText(f"Auto ({max(1, _cores - 2)})")
+        workers_spin.setValue(int(self.map_settings.get('load_workers') or 0))
+        workers_spin.setToolTip(
+            f"Worker processes that parse DFF/TXD files in parallel while an IPL loads.\n"
+            f"This system has {_cores} CPU cores. 1 = one at a time, Auto = cores - 2.")
+        ld_form.addRow(f"Parallel load workers ({_cores} cores):", workers_spin)
 
         ld_lay.addLayout(ld_form)
         ld_lay.addStretch()
+        for _grp in (perf_group, cache_group):   # Performance merged into Loading
+            ld_lay.insertWidget(ld_lay.count() - 1, _grp)
         tabs.addTab(loading_tab, "Loading")
 
-        # - Map Assets tab (Aug 1 2026)
-        assets_tab = QWidget()
-        as_lay = QVBoxLayout(assets_tab)
+        # - Textures tab (Oct 12 2026): per-format limits on load
+        textures_tab = QWidget()
+        tx_lay = QVBoxLayout(textures_tab)
+        tex_grp = QGroupBox("Texture size limit - reload the world after changing")
+        tx_grid = QGridLayout(tex_grp)
+        for _c, _h in enumerate(("Format", "Reduce", "Anything over", "Down to")):
+            tx_grid.addWidget(QLabel(f"<b>{_h}</b>"), 0, _c)
+
+        def _limit_spin(value, top): #vers 1
+            sp = QSpinBox()
+            sp.setRange(16, top)
+            sp.setSingleStep(16)
+            sp.setValue(int(value))
+            return sp
+
+        downscale_chk = QCheckBox()
+        downscale_chk.setChecked(self.map_settings.get('texture_downscale_enabled'))
+        downscale_threshold_spin = _limit_spin(self.map_settings.get('texture_downscale_threshold'), 4096)
+        downscale_target_spin = _limit_spin(self.map_settings.get('texture_downscale_target'), 2048)
+        tex_rows = {'rw': (downscale_chk, downscale_threshold_spin, downscale_target_spin)}
+        for g in ('iv', 'stories', 'nif'):
+            chk = QCheckBox()
+            chk.setChecked(bool(self.map_settings.get(f'tex_limit_{g}_on')))
+            tex_rows[g] = (chk, _limit_spin(self.map_settings.get(f'tex_limit_{g}_over'), 4096),
+                           _limit_spin(self.map_settings.get(f'tex_limit_{g}_to'), 2048))
+        for r, (g, title, tip) in enumerate((
+                ('rw', "RenderWare", "TXD and DFF: PC, Xbox, PS2, PSP, mobile"),
+                ('iv', "GTA IV", "WTD, and textures inside WDR / WFT"),
+                ('stories', "LCS / VCS", "CHK / XTX textures for MDL models"),
+                ('nif', "Bully (Gamebryo)", "NFT texture packs for NIF models")), 1):
+            lbl = QLabel(title)
+            lbl.setToolTip(tip)
+            tx_grid.addWidget(lbl, r, 0)
+            for c, w in enumerate(tex_rows[g], 1):
+                w.setToolTip(tip)
+                tx_grid.addWidget(w, r, c)
+        tx_grid.setColumnStretch(4, 1)
+        tx_lay.addWidget(tex_grp)
+        keep_dxt_chk = QCheckBox("Keep DXT textures compressed (graphics card decodes, 4-8x less memory)")
+        keep_dxt_chk.setChecked(bool(self.map_settings.get('tex_keep_dxt')))
+        keep_dxt_chk.setToolTip("RW PC and GTA IV DXT1/3/5 textures. Reload the world after changing.")
+        tx_lay.addWidget(keep_dxt_chk)
         load_generic_btn = QPushButton("Load Generic.txd Manually")
         load_generic_btn.setToolTip(
             "Manually (re)load generic.txd - the shared texture archive\n"
@@ -9282,11 +6125,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "always loads via the exe), then falls back to {game root}/\n"
             "models/generic.txd as a loose file.")
         load_generic_btn.clicked.connect(self._on_load_generic_txd_clicked)
-        as_lay.addWidget(load_generic_btn)
+        tx_lay.addWidget(load_generic_btn)
+        tx_lay.addStretch()
 
-        as_lay.addWidget(QLabel(""))
-        as_lay.addWidget(QLabel("—  LOD Test  —"))
-        lod_test_form = QFormLayout()
+        lod_test_grp = QGroupBox("LOD Test")
+        lod_test_form = QFormLayout(lod_test_grp)
         lod_test_radius_spin = QSpinBox()
         lod_test_radius_spin.setRange(1, 10000)
         lod_test_radius_spin.setSingleStep(50)
@@ -9297,10 +6140,36 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "models outside switch to the other (see the LOD Test\n"
             "checkbox in IPL Controls).")
         lod_test_form.addRow("Circle radius:", lod_test_radius_spin)
-        as_lay.addLayout(lod_test_form)
 
-        as_lay.addStretch()
-        tabs.addTab(assets_tab, "Map Assets")
+        # - Save Points tab (Sep 23 2026)
+        sp_tab = QWidget()
+        sp_lay = QVBoxLayout(sp_tab)
+        sp_form = QFormLayout()
+        sp_enabled_chk = QCheckBox("Automatic save points")
+        sp_enabled_chk.setChecked(bool(self.map_settings.get('savepoints_enabled')))
+        sp_enabled_chk.setToolTip("Snapshot unsaved map edits on a timer.\n"
+                                  "Game files are not touched; restore from the IPL list menu.")
+        sp_form.addRow(sp_enabled_chk)
+        sp_interval_spin = QSpinBox()
+        sp_interval_spin.setRange(1, 240)
+        sp_interval_spin.setSuffix(" min")
+        sp_interval_spin.setValue(int(self.map_settings.get('savepoints_interval_min') or 10))
+        sp_form.addRow("Every:", sp_interval_spin)
+        sp_keep_spin = QSpinBox()
+        sp_keep_spin.setRange(1, 500)
+        sp_keep_spin.setValue(int(self.map_settings.get('savepoints_keep') or 20))
+        sp_keep_spin.setToolTip("Oldest automatic save points beyond this are deleted")
+        sp_form.addRow("Keep automatic:", sp_keep_spin)
+        sp_lay.addLayout(sp_form)
+        sp_btn_row = QHBoxLayout()
+        sp_now_btn = QPushButton("Create Save Point Now")
+        sp_now_btn.clicked.connect(lambda: self._create_savepoint("Manual"))
+        sp_restore_btn = QPushButton("Restore...")
+        sp_restore_btn.clicked.connect(self._restore_savepoint_dialog)
+        sp_btn_row.addWidget(sp_now_btn)
+        sp_btn_row.addWidget(sp_restore_btn)
+        sp_lay.addLayout(sp_btn_row)
+        sp_lay.addStretch()
 
         # - Navigation tab (Aug 1 2026)
         nav_tab = QWidget()
@@ -9359,7 +6228,84 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "or other viewport elements yet.")
         nav_lay.addWidget(hover_highlight_chk)
 
+        # View from above when selecting a model (Sep 5 2026, per
+        #  : "when selecting a model in map workshop, can we
+        # change the camera view, have a setting, view from 0, +200
+        # so we dont view the model from the bottom, we see it from
+        # the top instead")
+        focus_above_chk = QCheckBox("View from above when selecting a model")
+        focus_above_chk.setChecked(bool(self.map_settings.get('focus_from_above')))
+        focus_above_chk.setToolTip(
+            "When selecting/double-clicking a model, reset the camera\n"
+            "to look straight down from above instead of keeping\n"
+            "whatever angle it already happened to be at (which can\n"
+            "end up looking up at the model from underneath).")
+        nav_lay.addWidget(focus_above_chk)
+
+        focus_above_dist_row = QHBoxLayout()
+        focus_above_dist_row.addWidget(QLabel("From-above height:"))
+        focus_above_dist_spin = QDoubleSpinBox()
+        focus_above_dist_spin.setRange(10.0, 2000.0)
+        focus_above_dist_spin.setSingleStep(10.0)
+        focus_above_dist_spin.setValue(float(self.map_settings.get('focus_from_above_dist', 200.0)))
+        focus_above_dist_spin.setEnabled(focus_above_chk.isChecked())
+        focus_above_chk.toggled.connect(focus_above_dist_spin.setEnabled)
+        focus_above_dist_row.addWidget(focus_above_dist_spin)
+        nav_lay.addLayout(focus_above_dist_row)
+
+        # IPL Object Editor always-on-top (Sep 5 2026,  "the
+        # IPL file editor should stay on top, with a settings toggle
+        # option")
+        ipl_editor_on_top_chk = QCheckBox("Keep IPL Object Editor on top")
+        ipl_editor_on_top_chk.setChecked(bool(self.map_settings.get('ipl_editor_always_on_top')))
+        ipl_editor_on_top_chk.setToolTip(
+            "Keeps the IPL Object Editor window above other windows,\n"
+            "including outside this app, instead of it being able to\n"
+            "get covered by whatever you click on next.")
+        nav_lay.addWidget(ipl_editor_on_top_chk)
+
+        # VC-layout IPL stems (Sep 5 2026,  "LC, MLL, VC are
+        # still in VC format... a loading toggle to adjust ipl loading
+        # patterns")
+        vc_layout_row = QHBoxLayout()
+        vc_layout_row.addWidget(QLabel("Load as VC format (stems):"))
+        vc_layout_ipl_stems_edit = QLineEdit(str(self.map_settings.get('vc_layout_ipl_stems', '')))
+        vc_layout_ipl_stems_edit.setPlaceholderText("e.g. lc,mll,vc")
+        vc_layout_ipl_stems_edit.setToolTip(
+            "Comma-separated IPL filename stems (no extension) to\n"
+            "parse using VC's own field layout instead of this\n"
+            "world's normal one - for sub-city IPLs (e.g. SOL's own\n"
+            "LC/MLL/VC ones) that are still genuinely VC-format even\n"
+            "though the rest of the world isn't.")
+        vc_layout_row.addWidget(vc_layout_ipl_stems_edit)
+        nav_lay.addLayout(vc_layout_row)
+
+        nav_lay.addWidget(QLabel(""))
+        nav_lay.addWidget(QLabel("—  Game Controller  —"))
+        pad_chk = QCheckBox("Use game controller (PS5 / PS4 / Xbox, needs pygame)")
+        pad_chk.setChecked(bool(self.map_settings.get('gamepad_enabled')))
+        pad_chk.setToolTip(
+            "Right stick orbit, L2/R2 zoom, left stick pan / move grab.\n"
+            "Cross select, grab, drop | Square add to selection | Circle cancel / clear\n"
+            "Triangle Move/Rotate | L1/R1 constraint | D-pad Z or 15 deg\n"
+            "Options edge snap | Create duplicate | Touchpad drop to ground | L3 fine")
+        nav_lay.addWidget(pad_chk)
+        pad_dz_row = QHBoxLayout()
+        pad_dz_row.addWidget(QLabel("Stick deadzone:"))
+        pad_dz_spin = QDoubleSpinBox()
+        pad_dz_spin.setRange(0.0, 0.5)
+        pad_dz_spin.setSingleStep(0.01)
+        pad_dz_spin.setValue(float(self.map_settings.get('gamepad_deadzone') or 0.15))
+        pad_dz_row.addWidget(pad_dz_spin)
+        pad_dz_row.addStretch()
+        nav_lay.addLayout(pad_dz_row)
+
         nav_lay.addStretch()
+        sp_grp = QGroupBox("Save Points")   # Save Points + LOD Test merged here
+        QVBoxLayout(sp_grp).addWidget(sp_tab)
+        nav_lay.insertWidget(nav_lay.count() - 1, sp_grp)
+        nav_lay.insertWidget(nav_lay.count() - 1, lod_test_grp)
+        tabs.addTab(textures_tab, "Textures")
         tabs.addTab(nav_tab, "Navigation")
 
         # TAB 8: KEYBINDINGS (Aug 16 2026)
@@ -9402,7 +6348,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         keys_lay.addStretch()
         tabs.addTab(keys_tab, "Keybindings")
 
-        def apply_settings():  #vers 2
+        def apply_settings():  #vers 3
             # Loading / Map Assets tabs saved first (Aug 1 2026),
             # before any of this function's other, pre-existing logic
             # runs - that logic has at least one confirmed broken
@@ -9437,13 +6383,22 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.map_settings.set('water2_y_offset', water2_y_spin.value())
             if vp_for_water2 is not None and hasattr(vp_for_water2, 'set_water2_y_offset'):
                 vp_for_water2.set_water2_y_offset(water2_y_spin.value())
-            self.map_settings.set('water2_offset_vc_only', water2_vc_only_chk.isChecked())
-            if vp_for_water2 is not None and hasattr(vp_for_water2, 'set_water2_offset_vc_only'):
-                vp_for_water2.set_water2_offset_vc_only(water2_vc_only_chk.isChecked())
+            mode = water2_mode_combo.currentData()
+            self.map_settings.set('water2_offset_mode', mode)
+            self.map_settings.set('water2_offset_vc_only', mode == 'vc')
+            if vp_for_water2 is not None and hasattr(vp_for_water2, 'set_water2_offset_mode'):
+                vp_for_water2.set_water2_offset_mode(mode)
             self.map_settings.set('show_verbose_loading_dialog',   verbose_loading_chk.isChecked())
+            self.map_settings.set('load_workers', workers_spin.value())
             self.map_settings.set('texture_downscale_enabled',   downscale_chk.isChecked())
             self.map_settings.set('texture_downscale_threshold', downscale_threshold_spin.value())
             self.map_settings.set('texture_downscale_target',    downscale_target_spin.value())
+            self.map_settings.set('tex_keep_dxt', keep_dxt_chk.isChecked())
+            for g in ('iv', 'stories', 'nif'):
+                chk, over, to = tex_rows[g]
+                self.map_settings.set(f'tex_limit_{g}_on', chk.isChecked())
+                self.map_settings.set(f'tex_limit_{g}_over', over.value())
+                self.map_settings.set(f'tex_limit_{g}_to', to.value())
             self.map_settings.set('lod_test_circle_radius', float(lod_test_radius_spin.value()))
             vp2 = getattr(self, 'preview_widget', None)
             if vp2 is not None and hasattr(vp2, '_lod_test_radius'):
@@ -9454,6 +6409,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.map_settings.set('auto_highlight_hover', hover_highlight_chk.isChecked())
             if vp2 is not None and hasattr(vp2, 'set_hover_highlight_enabled'):
                 vp2.set_hover_highlight_enabled(hover_highlight_chk.isChecked())
+            self.map_settings.set('focus_from_above', focus_above_chk.isChecked())
+            self.map_settings.set('focus_from_above_dist', float(focus_above_dist_spin.value()))
+            self.map_settings.set('ipl_editor_always_on_top', ipl_editor_on_top_chk.isChecked())
+            self._apply_ipl_editor_on_top_setting()
+            self.map_settings.set('vc_layout_ipl_stems', vc_layout_ipl_stems_edit.text().strip())
 
             # Keybindings (Aug 16 2026)
             key_overrides = {}
@@ -9472,6 +6432,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     downscale_chk.isChecked(),
                     downscale_threshold_spin.value(),
                     downscale_target_spin.value())
+            if getattr(self, '_model_cache', None) is not None:   # all formats, on load
+                self._model_cache.set_texture_limit(self._texture_limits(),
+                                                    self.map_settings.get('tex_keep_dxt'))
 
             # Render tab (Aug 16 2026)
             if vp is not None:
@@ -9550,6 +6513,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if vp is not None and hasattr(vp, 'set_no_clip_boxes'):
                 vp.set_no_clip_boxes(no_clip_chk.isChecked())
             self.map_settings.set('radar_tiles_show_grid', radar_show_grid_chk.isChecked())
+            self.map_settings.set('gamepad_enabled', pad_chk.isChecked())
+            self.map_settings.set('gamepad_deadzone', pad_dz_spin.value())
+            self._apply_gamepad_setting()
+            self.map_settings.set('savepoints_enabled', sp_enabled_chk.isChecked())
+            self.map_settings.set('savepoints_interval_min', sp_interval_spin.value())
+            self.map_settings.set('savepoints_keep', sp_keep_spin.value())
+            if hasattr(self, '_savepoint_timer'):
+                self._apply_savepoint_settings()
             grid_type_key = grid_type_combo.currentData()
             self.map_settings.set('grid_type', grid_type_key)
             if vp is not None and hasattr(vp, 'set_grid_type'):
@@ -9673,7 +6644,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 self._checkerboard_size = cb_spin.value()
                 self._overlay_opacity = opacity_spin.value()
 
-                # Real persistence for everything just applied above (Aug 20 2026)
+                #  persistence for everything just applied above (Aug 20 2026)
                 self.map_settings.set('default_font_family', default_font_family)
                 self.map_settings.set('default_font_size', default_font_size_v)
                 self.map_settings.set('title_font_family', title_font_family)
@@ -9767,19 +6738,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # Show dialog
         dialog.exec()
 
-    def get_settings_contribution(self): #vers 1
-        """Return this workshop's settings as a list of (label,
-        widget) tab contributions plus a combined apply callback, for
-        embedding into IMG Factory's own Settings dialog when Map
-        Workshop is docked (Aug 15 2026)"""
-        tabs, apply_settings = self._build_workshop_settings_tabs()
-        contributions = []
-        while tabs.count():
-            label = tabs.tabText(0)
-            widget = tabs.widget(0)
-            tabs.removeTab(0)
-            contributions.append((label, widget))
-        return contributions, apply_settings
 
     def _apply_window_flags(self): #vers 1
         """Apply window flags based on settings"""
@@ -9810,69 +6768,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.main_window.log_message(f"Window mode: {mode}")
 
 
-    def _apply_always_on_top(self): #vers 1
-        """Apply always on top window flag"""
-        current_flags = self.windowFlags()
-
-        if self.window_always_on_top:
-            new_flags = current_flags | Qt.WindowType.WindowStaysOnTopHint
-        else:
-            new_flags = current_flags & ~Qt.WindowType.WindowStaysOnTopHint
-
-        if new_flags != current_flags:
-            # Save state
-            current_geometry = self.geometry()
-            was_visible = self.isVisible()
-
-            self.setWindowFlags(new_flags)
-
-            self.setGeometry(current_geometry)
-            if was_visible:
-                self.show()
-
-
-    def _scan_available_locales(self): #vers 2
-        """Scan locale folder and return list of available languages"""
-        import os
-        import configparser
-
-        locales = []
-        locale_path = os.path.join(os.path.dirname(__file__), 'locale')
-
-        if not os.path.exists(locale_path):
-            # Easter egg: Amiga Workbench 3.1 style error
-            self._show_amiga_locale_error()
-            # Return default English
-            return [("English", "en", None)]
-
-        try:
-            for filename in os.listdir(locale_path):
-                if filename.endswith('.lang'):
-                    filepath = os.path.join(locale_path, filename)
-
-                    try:
-                        config = configparser.ConfigParser()
-                        config.read(filepath, encoding='utf-8')
-
-                        if 'Metadata' in config:
-                            lang_name = config['Metadata'].get('LanguageName', 'Unknown')
-                            lang_code = config['Metadata'].get('LanguageCode', 'unknown')
-                            locales.append((lang_name, lang_code, filepath))
-
-                    except Exception as e:
-                        if self.main_window and hasattr(self.main_window, 'log_message'):
-                            self.main_window.log_message(f"Failed to load locale {filename}: {e}")
-
-        except Exception as e:
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                self.main_window.log_message(f"Locale scan error: {e}")
-
-        locales.sort(key=lambda x: x[0])
-
-        if not locales:
-            locales = [("English", "en", None)]
-
-        return locales
 
 
     def _show_amiga_locale_error(self): #vers 2
@@ -10037,23 +6932,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.show()
 
 
-    def _apply_button_mode(self, dialog): #vers 1
-        """Apply button display mode"""
-        mode_index = self.button_mode_combo.currentIndex()
-        mode_map = {0: 'both', 1: 'icons', 2: 'text'}
-
-        new_mode = mode_map[mode_index]
-
-        if new_mode != self.button_display_mode:
-            self.button_display_mode = new_mode
-            self._update_all_buttons()
-
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                mode_names = {0: 'Icons + Text', 1: 'Icons Only', 2: 'Text Only'}
-                self.main_window.log_message(f"✨ Button style: {mode_names[mode_index]}")
-
-        dialog.close()
-
 
 # - Window functionality
 
@@ -10127,38 +7005,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 self._apply_button_mode_to_button(button, btn_text)
         self._update_dock_button_visibility()
 
-    def _apply_button_mode_to_button(self, button, text): #vers 1
-        """Apply display mode to a single button with proper spacing (Aug 16 2026)"""
-        from PyQt6.QtGui import QAction
-        if isinstance(button, QAction) or not hasattr(button, 'setFixedSize'):
-            return
-        if not hasattr(button, '_original_icon'):
-            button._original_icon = button.icon()
-
-        if self.button_display_mode == 'icons':
-            button.setText("")
-            if not button._original_icon.isNull():
-                button.setIcon(button._original_icon)
-                button.setIconSize(QSize(20, 20))
-            button.setFixedSize(40, 40)
-
-        elif self.button_display_mode == 'text':
-            button.setText(text)
-            button.setIcon(QIcon())
-            button.setMinimumWidth(60)
-            button.setMaximumWidth(16777215)
-            button.setMinimumHeight(0)
-            button.setMaximumHeight(16777215)
-
-        elif self.button_display_mode == 'both':
-            button.setText(text)
-            if not button._original_icon.isNull():
-                button.setIcon(button._original_icon)
-                button.setIconSize(QSize(20, 20))
-            button.setMinimumWidth(0)
-            button.setMaximumWidth(16777215)
-            button.setMinimumHeight(0)
-            button.setMaximumHeight(16777215)
+    def _apply_button_mode_to_button(self, button, text): #vers 2
+        """Apply display mode via shared helper."""
+        from apps.methods.button_mode import apply_button_mode_to_button
+        apply_button_mode_to_button(button, text, self.button_display_mode)
 
     def paintEvent(self, event): #vers 3
         """Paint corner resize triangles — only in standalone/frameless mode."""
@@ -10166,7 +7016,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if not self.standalone_mode:
             return
 
-        from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath
+        from PyQt6.QtGui import QPainter, QColor, QBrush, QPainterPath
 
         painter = QPainter(self)
         if not painter.isActive():
@@ -10224,8 +7074,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         painter.end()
 
 
-    def _get_resize_corner(self, pos): #vers 3
+    def _get_resize_corner(self, pos): #vers 4
         """Determine which corner is under mouse position"""
+        if not self.standalone_mode:           # docked: no corner resize
+            return None
         size = self.corner_size; w = self.width(); h = self.height()
 
         if pos.x() < size and pos.y() < size:
@@ -10347,35 +7199,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 self.resize(new_width, new_height)
 
 
-    def _get_resize_direction(self, pos): #vers 1
-        """Determine resize direction based on mouse position"""
-        rect = self.rect()
-        margin = self.resize_margin
-
-        left = pos.x() < margin
-        right = pos.x() > rect.width() - margin
-        top = pos.y() < margin
-        bottom = pos.y() > rect.height() - margin
-
-        if left and top:
-            return "top-left"
-        elif right and top:
-            return "top-right"
-        elif left and bottom:
-            return "bottom-left"
-        elif right and bottom:
-            return "bottom-right"
-        elif left:
-            return "left"
-        elif right:
-            return "right"
-        elif top:
-            return "top"
-        elif bottom:
-            return "bottom"
-
-        return None
-
 
     def _update_cursor(self, direction): #vers 1
         """Update cursor based on resize direction"""
@@ -10391,60 +7214,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
 
-    def _handle_resize(self, global_pos): #vers 1
-        """Handle window resizing"""
-        if not self.resize_direction or not self.drag_position:
-            return
 
-        delta = global_pos - self.drag_position
-        geometry = self.frameGeometry()
-
-        min_width = 800
-        min_height = 600
-
-        # Handle horizontal resizing
-        if "left" in self.resize_direction:
-            new_width = geometry.width() - delta.x()
-            if new_width >= min_width:
-                geometry.setLeft(geometry.left() + delta.x())
-        elif "right" in self.resize_direction:
-            new_width = geometry.width() + delta.x()
-            if new_width >= min_width:
-                geometry.setRight(geometry.right() + delta.x())
-
-        # Handle vertical resizing
-        if "top" in self.resize_direction:
-            new_height = geometry.height() - delta.y()
-            if new_height >= min_height:
-                geometry.setTop(geometry.top() + delta.y())
-        elif "bottom" in self.resize_direction:
-            new_height = geometry.height() + delta.y()
-            if new_height >= min_height:
-                geometry.setBottom(geometry.bottom() + delta.y())
-
-        self.setGeometry(geometry)
-        self.drag_position = global_pos
-
-
-    def resizeEvent(self, event): #vers 2
-        """Update layout on resize."""
-        super().resizeEvent(event)
-        if hasattr(self, 'size_grip'):
-            self.size_grip.move(self.width() - 16, self.height() - 16)
-        self._update_transform_text_panel_visibility()
-
-    def _on_splitter_moved(self, pos, index): #vers 2
-        """Called when main splitter is dragged - update text panel and compact buttons."""
-        self._update_transform_text_panel_visibility()
-        try:
-            from apps.methods.imgfactory_ui_settings import apply_compact_buttons
-            mid_btns = getattr(self, '_mid_compact_btns', [])
-            if mid_btns:
-                row = getattr(self, '_middle_btn_row', None)
-                w = row.width() if (row and row.width() > 0) else self.width()
-                apply_compact_buttons(mid_btns, w, compact_threshold=320)
-        except Exception:
-            pass
 
     def _update_transform_text_panel_visibility(self): #vers 3
         """DockableToolbar version — toolbars manage their own visibility."""
@@ -10551,18 +7321,21 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.showMaximized()
 
 
-    def closeEvent(self, event): #vers 5
-        """Handle close — _save_toolbar_state fires via window_closed
+    def closeEvent(self, event): #vers 6
+        """Handle close — asks about unsaved IPL edits first; _save_toolbar_state fires via window_closed
         signal. Flushes any still-pending debounced settings save
         (Aug 16 2026)
 
-        Real fix (Aug 20 2026, per Keith: "remember the zoom settings,
+         fix (Aug 20 2026,  "remember the zoom settings,
         and view location when app is closed") - saves the viewport's
         own real camera state (zoom/_dist, pan_x/pan_y, yaw/pitch)
         here on close specifically, rather than on every zoom/pan/
         rotate change - those fire on every single mouse-drag frame,
         so debouncing wouldn't meaningfully reduce the write volume
         the way it does for a settings-dialog Apply click."""
+        if not self.confirm_close():
+            event.ignore()
+            return
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(self, 'map_settings'):
             try:
@@ -10622,7 +7395,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
 # - Panel Setup
 
-    def _create_toolbar(self): #vers 14
+    def _create_toolbar(self): #vers 15
         """Create toolbar - Hide drag button when docked, ensure buttons visible"""
         # Read sizes from app_settings so they match Global App System Settings
         try:
@@ -10722,7 +7495,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if self.button_display_mode == 'icons':
             self.open_btn.setFixedSize(40, 40)
         self.open_btn.setToolTip("Open DFF or COL model file (Ctrl+O)")
-        self.open_btn.clicked.connect(self._open_file)
+        self.open_btn.clicked.connect(self._map_open_menu)
         layout.addWidget(self.open_btn)
 
         # Open DFF (standalone — skips COL filter)
@@ -10731,8 +7504,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.open_dff_btn.setIcon(self.icon_factory.open_icon(color=icon_color))
         self.open_dff_btn.setText("DFF/ TXD")
         self.open_dff_btn.setIconSize(QSize(20, 20))
-        self.open_dff_btn.setToolTip("Open a DFF model file directly (Ctrl+D)")
-        self.open_dff_btn.setShortcut("Ctrl+D")
+        self.open_dff_btn.setToolTip("Open a DFF model file directly")
         self.open_dff_btn.clicked.connect(self._open_dff_standalone)
 
         self.load_txd_btn = QPushButton("TXD")
@@ -10770,12 +7542,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.save_btn.setIcon(self.icon_factory.save_icon(color=icon_color))
         self.save_btn.setText("Save")
         self.save_btn.setIconSize(QSize(20, 20))
-        self.save_btn.setShortcut("Ctrl+S")
         if self.button_display_mode == 'icons':
             self.save_btn.setFixedSize(40, 40)
         self.save_btn.setEnabled(True)
-        self.save_btn.setToolTip("Export/save model (Ctrl+S)")
-        self.save_btn.clicked.connect(self._save_file)
+        self.save_btn.setToolTip("Save changed IPLs, or the open model (Ctrl+S)")
+        self.save_btn.clicked.connect(self._save_map_or_model)
         layout.addWidget(self.save_btn)
 
         # Save button
@@ -10784,7 +7555,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.saveall_btn.setIcon(self.icon_factory.saveas_icon(color=icon_color))
         self.saveall_btn.setText("Save All")
         self.saveall_btn.setIconSize(QSize(20, 20))
-        self.saveall_btn.setShortcut("Ctrl+S")
         if self.button_display_mode == 'icons':
             self.saveall_btn.setFixedSize(40, 40)
         self.saveall_btn.setEnabled(True)
@@ -10804,8 +7574,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.tb_import_btn.setIconSize(QSize(20, 20))
         if self.button_display_mode == 'icons':
             self.tb_import_btn.setFixedSize(40, 40)
-        self.tb_import_btn.setToolTip("Import — MDL, OBJ, FBX and other formats")
-        self.tb_import_btn.clicked.connect(self._import_model)
+        self.tb_import_btn.setToolTip("Import IPL / IDE into the loaded world, or a model")
+        self.tb_import_btn.clicked.connect(self._map_import_menu)
         layout.addWidget(self.tb_import_btn)
 
         # Export button (title bar) — same _export_model_menu callback the
@@ -10820,8 +7590,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.export_ojs_btn.setIconSize(QSize(20, 20))
         if self.button_display_mode == 'icons':
             self.export_ojs_btn.setFixedSize(40, 40)
-        self.export_ojs_btn.setToolTip("Export — OBJ, COL, 3DS, FBX and other formats")
-        self.export_ojs_btn.clicked.connect(self._export_model_menu)
+        self.export_ojs_btn.setToolTip("Export IPLs (selected / changed), or the model")
+        self.export_ojs_btn.clicked.connect(self._map_export_menu)
         self.export_ojs_btn.setEnabled(True)
         layout.addWidget(self.export_ojs_btn)
 
@@ -10942,193 +7712,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     #Left side vertical panel
 
 
-    def _create_col_from_dff(self): #vers 1
-        """Generate a COL collision file from the currently loaded DFF model.
-        Creates one COL mesh per DFF geometry using the actual triangle data.
-        Opens the result in COL Workshop."""
-        from PyQt6.QtWidgets import QMessageBox, QInputDialog
-
-        model = getattr(self, '_current_dff_model', None)
-        if model is None:
-            QMessageBox.information(self, "No DFF",
-                "Load a DFF model first.")
-            return
-
-        dff_name = os.path.splitext(
-            os.path.basename(getattr(self, '_current_dff_path', 'model.dff') or 'model.dff')
-        )[0]
-
-        geoms = getattr(model, 'geometries', [])
-        if not geoms:
-            QMessageBox.information(self, "No Geometry",
-                "The loaded DFF has no geometry to convert.")
-            return
-
-        # Ask for COL version
-        ver, ok = QInputDialog.getItem(
-            self, "COL Version",
-            "Choose COL format for export:",
-            ["COL2 (GTA3/VC/SOL recommended)",
-             "COL3 (SA)",
-             "COL1 (legacy)"],
-            0, False)
-        if not ok:
-            return
-        col_ver = 2 if "COL2" in ver else 3 if "COL3" in ver else 1
-
-        mw = self.main_window
-        try:
-            import struct, tempfile
-
-            # Build minimal COL binary for each geometry
-            col_blobs = []
-            for gi, geom in enumerate(geoms):
-                verts = list(geom.vertices) if hasattr(geom,'vertices') else []
-                faces = list(geom.faces)    if hasattr(geom,'faces')    else []
-                if not verts or not faces:
-                    continue
-
-                name = (geom.name if hasattr(geom,'name') and geom.name
-                        else f"{dff_name}").encode('ascii','ignore')[:22]
-                name = name.ljust(22, b'\x00')
-
-                # Bounding sphere — centre + radius
-                xs = [v[0] for v in verts]
-                ys = [v[1] for v in verts]
-                zs = [v[2] for v in verts]
-                cx,cy,cz = sum(xs)/len(xs), sum(ys)/len(ys), sum(zs)/len(zs)
-                radius = max(
-                    ((v[0]-cx)**2+(v[1]-cy)**2+(v[2]-cz)**2)**0.5
-                    for v in verts)
-
-                # Bounding box
-                bx_min,bx_max = min(xs),max(xs)
-                by_min,by_max = min(ys),max(ys)
-                bz_min,bz_max = min(zs),max(zs)
-
-                if col_ver == 1:
-                    # COL1 format
-                    n_verts = len(verts)
-                    n_faces = len(faces)
-                    vert_data = b''.join(struct.pack('<fff',*v) for v in verts)
-                    face_data = b''.join(
-                        struct.pack('<HHHBBbb',
-                            f[0]&0xFFFF, f[1]&0xFFFF, f[2]&0xFFFF,
-                            0,0,0,0)  # material, lighting
-                        for f in faces)
-                    payload = struct.pack('<fff', cx,cy,cz)  # sphere centre
-                    payload += struct.pack('<f', radius)       # sphere radius
-                    payload += struct.pack('<fff', bx_min,by_min,bz_min)  # bb min
-                    payload += struct.pack('<fff', bx_max,by_max,bz_max)  # bb max
-                    payload += struct.pack('<H', 0)     # n_spheres
-                    payload += struct.pack('<H', 0)     # n_boxes
-                    payload += struct.pack('<H', n_verts)
-                    payload += struct.pack('<H', n_faces)
-                    payload += vert_data
-                    payload += face_data
-                    block = b'COLL' + struct.pack('<I', 4+22+len(payload))
-                    block += struct.pack('<H', 0) + name[:22] + payload
-
-                else:
-                    # COL2/3 format
-                    sig = b'COL\x02' if col_ver == 2 else b'COL\x03'
-                    n_verts = len(verts)
-                    n_faces = len(faces)
-
-                    # Offsets (relative to start of payload after sig+size+name+modelid)
-                    header_end = 0x68   # standard COL2 header size
-                    vert_off   = header_end
-                    face_off   = vert_off + n_verts * 6  # int16 x3 per vert
-
-                    vert_data = b''
-                    for v in verts:
-                        # Quantise to int16 (scale 128)
-                        vx = max(-32767,min(32767,int(v[0]*128)))
-                        vy = max(-32767,min(32767,int(v[1]*128)))
-                        vz = max(-32767,min(32767,int(v[2]*128)))
-                        vert_data += struct.pack('<hhh', vx,vy,vz)
-
-                    face_data = b''.join(
-                        struct.pack('<HHHBBBB',
-                            f[0]&0xFFFF, f[1]&0xFFFF, f[2]&0xFFFF,
-                            0, 0, 0, 0)  # material, lighting
-                        for f in faces)
-
-                    payload  = struct.pack('<fff', bx_min,by_min,bz_min)
-                    payload += struct.pack('<fff', bx_max,by_max,bz_max)
-                    payload += struct.pack('<fff', cx,cy,cz)
-                    payload += struct.pack('<f',   radius)
-                    # Counts
-                    payload += struct.pack('<HHHHHH',
-                        0,       # n_spheres
-                        0,       # n_boxes
-                        n_faces, # n_mesh_faces
-                        0,       # flags
-                        n_verts, # n_verts
-                        0)       # pad
-                    # Offsets
-                    payload += struct.pack('<IIII',
-                        vert_off, face_off, 0, 0)
-                    # Pad to header_end
-                    while len(payload) < header_end - 4:
-                        payload += b'\x00\x00\x00\x00'
-                    payload += vert_data
-                    payload += face_data
-
-                    model_id = 0
-                    block = sig + struct.pack('<I', 4 + 22 + 2 + len(payload))
-                    block += name[:22]
-                    block += struct.pack('<H', model_id)
-                    block += payload
-
-                col_blobs.append(block)
-
-            if not col_blobs:
-                QMessageBox.warning(self, "No Geometry",
-                    "No geometry with vertices and faces found in the DFF.")
-                return
-
-            # Write all COL blocks to temp file
-            col_data = b''.join(col_blobs)
-            with tempfile.NamedTemporaryFile(
-                    delete=False, suffix='.col',
-                    prefix=dff_name + '_') as tf:
-                tf.write(col_data)
-                tmp_path = tf.name
-
-            # Open in COL Workshop
-            if mw and hasattr(mw, 'open_col_workshop_docked'):
-                mw.open_col_workshop_docked(file_path=tmp_path)
-                if hasattr(mw, 'log_message'):
-                    mw.log_message(
-                        f"COL from DFF: {len(col_blobs)} model(s)  "
-                        f"{sum(len(g.vertices) for g in geoms if hasattr(g,'vertices'))} verts  "
-                        f"→ {os.path.basename(tmp_path)}")
-            else:
-                QMessageBox.information(self, "COL Created",
-                    f"COL file written to:\n{tmp_path}\n\n"
-                    f"{len(col_blobs)} model(s) from DFF geometry.")
-
-            self._set_status(
-                f"COL created from DFF: {len(col_blobs)} model(s)  "
-                f"({col_ver} format) — open in COL Workshop")
-
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            QMessageBox.critical(self, "COL Error",
-                f"Failed to create COL from DFF:\n{e}")
 
     # - DFF mode toolbar
-
-    def _toggle_backface_cull(self, enabled: bool): #vers 1
-        """Toggle back-face culling on the 3D viewport."""
-        vp = getattr(self, 'preview_widget', None)
-        if vp:
-            vp._backface_cull = enabled
-            vp.update()
-        btn = getattr(self, '_backface_cull_btn', None)
-        if btn:
-            btn.setChecked(enabled)
 
     def _toggle_viewport_shading(self, enabled: bool): #vers 1
         """Toggle Lambertian shading on/off in the viewport."""
@@ -11155,9 +7740,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Viewport light setup — visual position picker + sliders."""
         from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
             QLabel, QSlider, QPushButton, QDialogButtonBox,
-            QGroupBox, QCheckBox, QFrame, QComboBox)
+            QGroupBox, QCheckBox, QFrame)
         from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QRadialGradient
-        from PyQt6.QtCore import Qt as _Qt, QPointF, QRectF
+        from PyQt6.QtCore import Qt as _Qt
         import json, math, os
 
         vp = getattr(self, 'preview_widget', None)
@@ -11170,7 +7755,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         _shade_on = _sb.isChecked() if _sb else True
 
         # Internal state (az=azimuth 0-360, el=elevation 0-90)
-        import math as _m
         _az = [math.degrees(math.atan2(_dir[0], _dir[1])) % 360]
         _el = [max(0, min(90, math.degrees(math.asin(max(-1, min(1, _dir[2]))))))]
 
@@ -11284,7 +7868,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 ico_fn = _preset_icon_map.get(label)
                 if ico_fn:
                     pb.setIcon(getattr(_SVGL, ico_fn)(size=16))
-                    pb.setIconSize(_QS(16,16))
+                    pb.setIconSize(QSize(16,16))
             except Exception:
                 pass
             def _set_preset(checked=False, a=az2, e=el2):  #vers 1
@@ -11388,7 +7972,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _load_viewport_light_settings(self): #vers 1
         """Load saved viewport light settings from model_workshop.json."""
-        import json, os
+        import json
         cfg_path = str(_model_workshop_config_dir() / 'model_workshop.json')
         try:
             cfg = json.load(open(cfg_path))
@@ -11421,73 +8005,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             pass   # no saved settings — use defaults
 
 
-    def _apply_prelighting(self): #vers 1
-        """Apply vertex prelighting to DFF model - stub. See TODO.md."""
-        from PyQt6.QtWidgets import QMessageBox
-        model = getattr(self, '_current_dff_model', None)
-        if not model:
-            QMessageBox.information(self, "No DFF", "Load a DFF model first.")
-            return
-        QMessageBox.information(self, "Prelighting",
-            "Prelighting not yet available.\n"
-            "Will bake ambient + directional lights into vertex colours\n"
-            "for GTA3/VC/SOL compatibility.")
 
-    def _prelight_setup_dialog(self): #vers 1
-        """Light source setup for prelighting — stub."""
-        from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout,
-            QDoubleSpinBox, QLabel, QHBoxLayout, QPushButton,
-            QDialogButtonBox, QColorDialog)
-        from PyQt6.QtGui import QColor
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Prelighting Setup")
-        dlg.setMinimumWidth(320)
-        lay = QVBoxLayout(dlg)
-        form = QFormLayout()
-        lay.addWidget(QLabel(
-            "Configure light sources for vertex prelighting.\n"
-            "These will be baked into the DFF vertex colour channel."))
-        lay.addLayout(form)
-
-        # Ambient
-        amb_r = QDoubleSpinBox(); amb_r.setRange(0,1); amb_r.setValue(0.3); amb_r.setSingleStep(0.05)
-        amb_g = QDoubleSpinBox(); amb_g.setRange(0,1); amb_g.setValue(0.3); amb_g.setSingleStep(0.05)
-        amb_b = QDoubleSpinBox(); amb_b.setRange(0,1); amb_b.setValue(0.3); amb_b.setSingleStep(0.05)
-        amb_row = QHBoxLayout()
-        for lbl, sp in [("R:", amb_r),("G:", amb_g),("B:", amb_b)]:
-            amb_row.addWidget(QLabel(lbl)); amb_row.addWidget(sp)
-        form.addRow("Ambient colour:", amb_row)
-
-        # Sun direction
-        sx = QDoubleSpinBox(); sx.setRange(-1,1); sx.setValue(0.5); sx.setSingleStep(0.1)
-        sy = QDoubleSpinBox(); sy.setRange(-1,1); sy.setValue(-0.8); sy.setSingleStep(0.1)
-        sz = QDoubleSpinBox(); sz.setRange(-1,1); sz.setValue(0.3); sz.setSingleStep(0.1)
-        sun_row = QHBoxLayout()
-        for lbl, sp in [("X:", sx),("Y:", sy),("Z:", sz)]:
-            sun_row.addWidget(QLabel(lbl)); sun_row.addWidget(sp)
-        form.addRow("Sun direction:", sun_row)
-
-        # Sun intensity
-        si = QDoubleSpinBox(); si.setRange(0,2); si.setValue(1.0); si.setSingleStep(0.1)
-        form.addRow("Sun intensity:", si)
-
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
-                              QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
-        lay.addWidget(bb)
-
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Store settings for use by _apply_prelighting
-            self._prelight_ambient = (amb_r.value(), amb_g.value(), amb_b.value())
-            self._prelight_sun_dir = (sx.value(), sy.value(), sz.value())
-            self._prelight_sun_int = si.value()
-            self._set_status(
-                f"Prelight: ambient=({amb_r.value():.2f},{amb_g.value():.2f},{amb_b.value():.2f}) "
-                f"sun=({sx.value():.1f},{sy.value():.1f},{sz.value():.1f}) "
-                f"intensity={si.value():.1f}")
-            mw = self.main_window
-            if mw and hasattr(mw, 'log_message'):
-                mw.log_message("Prelight setup saved — click Apply to bake")
 
     def _enable_dff_toolbar(self, dff_mode: bool): #vers 3
         """Switch left toolbar between DFF mode and COL mode.
@@ -11796,7 +8314,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(f"Geometry [{idx}] duplicated.")
 
     def _on_snap_vertices_clicked(self): #vers 1
-        """Snap Vertices button handler (Aug 20 2026, per Keith: "the
+        """Snap Vertices button handler (Aug 20 2026,  "the
         biggest problem sometimes with making models is sometimes
         there are gaps, so we need a snap function") - delegates to
         the viewport's own real _snap_vertices, then reports the real
@@ -11817,12 +8335,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "Mirror is not yet implemented.\n"
             "Coming in a future build.")
 
-    def _align_dialog(self): #vers 1
-        """STUB: Align selection to another object or the world grid."""
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.information(self, "Align",
-            "Align is not yet implemented.\n"
-            "Coming in a future build.")
+    def _align_dialog(self): #vers 2
+        """Align menu: selected objects to last selected, distribute, drop."""
+        n = len(self._selected_instances())
+        menu = QMenu(self)
+        for ax in 'xyz':
+            menu.addAction(f"Align {ax.upper()} to last selected",
+                           lambda a=ax: self._align_selected(a)).setEnabled(n > 1)
+        menu.addAction("Distribute evenly", self._distribute_selected).setEnabled(n > 2)
+        menu.addAction(f"Drop to Ground ({n})", self._drop_selected_to_ground).setEnabled(n > 0)
+        if not n:
+            menu.addSeparator()
+            menu.addAction("Select objects in the world view first").setEnabled(False)
+        menu.exec(QCursor.pos())
 
     def _set_select_mode(self, mode: str): #vers 3
         """Set viewport selection mode: vertex / edge / face / poly / object.
@@ -11874,14 +8399,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     if b: b.setChecked(False)
                 grp.setExclusive(True)
 
-    def _toggle_backface_cull(self): #vers 1
+    def _toggle_backface_cull(self): #vers 2
         """Toggle backface culling — when ON only the front face is visible/selectable."""
         vp = getattr(self, 'preview_widget', None)
         if not vp:
             return
-        current = getattr(vp, '_backface', False)
-        vp.set_backface(not current)
-        state = "off (front+back)" if current else "on (front only)"
+        cull_on = not getattr(vp, '_backface_cull', True)
+        vp.set_backface_cull(cull_on)
+        state = "on (front only)" if cull_on else "off (front+back)"
         self._set_status(f"Backface cull: {state}")
 
     def _toggle_front_only_paint(self): #vers 1
@@ -11899,304 +8424,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     # - Primitive creation
 
-    def _create_primitive_dialog(self): #vers 1
-        """Show dialog to create a primitive shape (box or sphere) as a new DFF geometry."""
-        from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
-            QFormLayout, QLabel, QComboBox, QSpinBox, QDoubleSpinBox,
-            QDialogButtonBox, QGroupBox)
-        from PyQt6.QtCore import Qt as _Qt
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Create Primitive")
-        dlg.setMinimumWidth(300)
-        lay = QVBoxLayout(dlg)
-        form = QFormLayout()
 
-        type_combo = QComboBox()
-        type_combo.addItems(["Box", "Sphere", "Cylinder", "Plane"])
-        form.addRow("Shape:", type_combo)
-
-        # Dimensions
-        dim_grp = QGroupBox("Dimensions")
-        dim_lay = QFormLayout(dim_grp)
-        sx = QDoubleSpinBox(); sx.setRange(0.01, 1000); sx.setValue(1.0); sx.setSingleStep(0.5)
-        sy = QDoubleSpinBox(); sy.setRange(0.01, 1000); sy.setValue(1.0); sy.setSingleStep(0.5)
-        sz = QDoubleSpinBox(); sz.setRange(0.01, 1000); sz.setValue(1.0); sz.setSingleStep(0.5)
-        dim_lay.addRow("Width (X):",  sx)
-        dim_lay.addRow("Height (Y):", sy)
-        dim_lay.addRow("Depth (Z):",  sz)
-        lay.addLayout(form)
-        lay.addWidget(dim_grp)
-
-        # Subdivisions
-        sub_grp = QGroupBox("Subdivisions")
-        sub_lay = QFormLayout(sub_grp)
-        seg_x = QSpinBox(); seg_x.setRange(1, 64); seg_x.setValue(1)
-        seg_y = QSpinBox(); seg_y.setRange(1, 64); seg_y.setValue(1)
-        seg_z = QSpinBox(); seg_z.setRange(1, 64); seg_z.setValue(1)
-        sub_lay.addRow("Segments X:", seg_x)
-        sub_lay.addRow("Segments Y:", seg_y)
-        sub_lay.addRow("Segments Z:", seg_z)
-        lay.addWidget(sub_grp)
-
-        # Hide irrelevant fields for sphere
-        def _on_type_changed(t):  #vers 1
-            is_box = t in ("Box", "Plane")
-            seg_z.setEnabled(is_box)
-            sz.setEnabled(t != "Plane")
-        type_combo.currentTextChanged.connect(_on_type_changed)
-
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok |
-            QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        lay.addWidget(btns)
-
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        shape  = type_combo.currentText()
-        w, h, d = sx.value(), sy.value(), sz.value()
-        nx, ny, nz = seg_x.value(), seg_y.value(), seg_z.value()
-
-        try:
-            verts, tris = self._build_primitive(shape, w, h, d, nx, ny, nz)
-            self._add_geometry_to_dff(verts, tris, name=f"{shape.lower()}_01")
-            self._set_status(
-                f"Created {shape}: {w:.2f}×{h:.2f}×{d:.2f}  "
-                f"segs {nx}×{ny}×{nz}  "
-                f"({len(verts)} verts, {len(tris)} tris)")
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Primitive Error", str(e))
-
-    def _extrude_dialog(self): #vers 1
-        """Prompt for extrude distance and apply to the current face/poly
-        selection in the viewport. Positive = outward, negative = inward
-        (push-in, e.g. a recessed door/window/vent)."""
-        from PyQt6.QtWidgets import QInputDialog, QMessageBox
-
-        vp = getattr(self, 'preview_widget', None)
-        if vp is None:
-            return
-
-        mode = getattr(vp, '_select_mode', 'face')
-        if mode not in ('face', 'poly'):
-            QMessageBox.information(self, "Extrude",
-                "Switch to Face or Polygon select mode and select one or "
-                "more faces first.")
-            return
-
-        if not getattr(vp, '_selected_faces', None):
-            QMessageBox.information(self, "Extrude",
-                "Select one or more faces first, then Extrude.")
-            return
-
-        distance, ok = QInputDialog.getDouble(
-            self, "Extrude", "Distance (negative = push in):",
-            0.5, -1000.0, 1000.0, 3)
-        if not ok or distance == 0.0:
-            return
-
-        try:
-            success = vp._extrude_selected_faces(distance)
-            if success:
-                self._set_status(f"Extruded {len(vp._selected_faces)} face(s) by {distance:.3f}")
-            else:
-                QMessageBox.warning(self, "Extrude",
-                    "Nothing to extrude — load a DFF and select faces first.")
-        except Exception as e:
-            QMessageBox.warning(self, "Extrude Error", str(e))
-
-    def _build_primitive(self, shape: str,
-                          w: float, h: float, d: float,
-                          nx: int, ny: int, nz: int):  #vers 1
-        """Build vertex + triangle lists for a primitive.
-        Returns (verts: list[(x,y,z)], tris: list[(i,j,k)])."""
-        verts, tris = [], []
-
-        if shape == "Box":
-            # Generate a subdivided box
-            # Each face: (nx×ny), (nx×nz), (ny×nz) quads → 2 tris each
-            def _face_quad(p0, pu, pv, su, sv):  #vers 1
-                """Add a subdivided quad face."""
-                base = len(verts)
-                for iv in range(sv + 1):
-                    for iu in range(su + 1):
-                        x = p0[0] + pu[0]*iu/su + pv[0]*iv/sv
-                        y = p0[1] + pu[1]*iu/su + pv[1]*iv/sv
-                        z = p0[2] + pu[2]*iu/su + pv[2]*iv/sv
-                        verts.append((x, y, z))
-                for iv in range(sv):
-                    for iu in range(su):
-                        i0 = base + iv*(su+1) + iu
-                        i1 = i0 + 1
-                        i2 = i0 + (su+1)
-                        i3 = i2 + 1
-                        tris.append((i0, i1, i2))
-                        tris.append((i1, i3, i2))
-
-            hw, hh, hd = w/2, h/2, d/2
-            # +Y top
-            _face_quad((-hw, hh, -hd), (w,0,0), (0,0,d), nx, nz)
-            # -Y bottom
-            _face_quad((-hw,-hh,  hd), (w,0,0), (0,0,-d), nx, nz)
-            # +Z front
-            _face_quad((-hw,-hh,  hd), (w,0,0), (0,h,0), nx, ny)
-            # -Z back
-            _face_quad((-hw,-hh, -hd), (w,0,0), (0,h,0), nx, ny)
-            # -X left
-            _face_quad((-hw,-hh, -hd), (0,0,d), (0,h,0), nz, ny)
-            # +X right
-            _face_quad(( hw,-hh,  hd), (0,0,-d), (0,h,0), nz, ny)
-
-        elif shape == "Sphere":
-            import math
-            rings  = max(ny, 2)
-            slices = max(nx * 2, 4)
-            # Poles
-            verts.append((0,  h/2, 0))  # top
-            verts.append((0, -h/2, 0))  # bottom
-            top_idx, bot_idx = 0, 1
-            # Ring vertices
-            for ri in range(1, rings):
-                phi = math.pi * ri / rings
-                y   = (h/2) * math.cos(phi)
-                r   = (w/2) * math.sin(phi)
-                for si in range(slices):
-                    theta = 2 * math.pi * si / slices
-                    verts.append((r * math.cos(theta), y, r * math.sin(theta)))
-            ring_base = 2
-            def _ri(ring, seg): return ring_base + ring * slices + (seg % slices)  #vers 1
-            # Cap triangles
-            for si in range(slices):
-                tris.append((top_idx, _ri(0, si+1), _ri(0, si)))
-                tris.append((bot_idx, _ri(rings-2, si), _ri(rings-2, si+1)))
-            # Body quads
-            for ri in range(rings - 2):
-                for si in range(slices):
-                    tris.append((_ri(ri,si), _ri(ri,si+1), _ri(ri+1,si)))
-                    tris.append((_ri(ri,si+1), _ri(ri+1,si+1), _ri(ri+1,si)))
-
-        elif shape == "Plane":
-            hw, hd = w/2, d/2
-            for iz in range(nz + 1):
-                for ix in range(nx + 1):
-                    verts.append((-hw + w*ix/nx, 0, -hd + d*iz/nz))
-            for iz in range(nz):
-                for ix in range(nx):
-                    i0 = iz*(nx+1) + ix
-                    i1 = i0 + 1
-                    i2 = i0 + (nx+1)
-                    i3 = i2 + 1
-                    tris.append((i0, i1, i2))
-                    tris.append((i1, i3, i2))
-
-        elif shape == "Cylinder":
-            import math
-            slices = max(nx * 4, 8)
-            hw, hh = w/2, h/2
-            # Top + bottom centre
-            verts.append((0,  hh, 0)); top_c = 0
-            verts.append((0, -hh, 0)); bot_c = 1
-            # Top ring
-            top_base = len(verts)
-            for si in range(slices):
-                theta = 2*math.pi*si/slices
-                verts.append((hw*math.cos(theta), hh, hw*math.sin(theta)))
-            # Bottom ring
-            bot_base = len(verts)
-            for si in range(slices):
-                theta = 2*math.pi*si/slices
-                verts.append((hw*math.cos(theta), -hh, hw*math.sin(theta)))
-            # Body quads + caps
-            for si in range(slices):
-                nsi = (si+1) % slices
-                t0, t1 = top_base+si, top_base+nsi
-                b0, b1 = bot_base+si, bot_base+nsi
-                tris.append((t0, t1, b0))
-                tris.append((t1, b1, b0))
-                tris.append((top_c, t1, t0))
-                tris.append((bot_c, b0, b1))
-
-        return verts, tris
-
-    def _add_geometry_to_dff(self, verts: list, tris: list,
-                              name: str = "primitive"): #vers 2
-        """Add a new geometry to the current DFF model from raw verts+tris.
-        If no DFF model is loaded yet, creates a new blank one first so
-        primitives can be built completely from scratch.
-        Builds a real Geometry/Triangle/Vector3 (not a duck-typed stand-in)
-        so the result is identical to a loaded DFF and saves correctly."""
-        import math
-        from apps.components.Model_Editor.depends.dff_classes import (
-            DFFModel, Geometry, Triangle, Vector3, TexCoord, Frame, Atomic,
-            BoundingSphere)
-
-        model = getattr(self, '_current_dff_model', None)
-        if model is None:
-            # Nothing loaded — create a brand new empty model with one
-            # root frame so the primitive has somewhere to attach.
-            model = DFFModel()
-            model.frames.append(Frame(name="root", parent_index=-1))
-            self._current_dff_model = model
-            self._current_dff_path = None
-            self.current_col_file = None
-            if hasattr(self, 'format_combo'):
-                self.format_combo.setVisible(False)
-
-        geom = Geometry()
-        geom.vertices = [Vector3(x, y, z) for (x, y, z) in verts]
-        geom.triangles = [Triangle(v1=i0, v2=i1, v3=i2, material_id=0)
-                           for (i0, i1, i2) in tris]
-        geom.uv_layers = [[TexCoord(0.0, 0.0) for _ in verts]]
-
-        # Per-vertex normals: accumulate face normals, then normalise
-        vert_normals = [[0.0, 0.0, 0.0] for _ in verts]
-        for i0, i1, i2 in tris:
-            v0, v1, v2 = verts[i0], verts[i1], verts[i2]
-            ax, ay, az = v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]
-            bx, by, bz = v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]
-            nx = ay*bz - az*by
-            ny = az*bx - ax*bz
-            nz = ax*by - ay*bx
-            ln = math.sqrt(nx*nx + ny*ny + nz*nz) or 1.0
-            nx, ny, nz = nx/ln, ny/ln, nz/ln
-            for idx in (i0, i1, i2):
-                vert_normals[idx][0] += nx
-                vert_normals[idx][1] += ny
-                vert_normals[idx][2] += nz
-        normals = []
-        for nx, ny, nz in vert_normals:
-            ln = math.sqrt(nx*nx + ny*ny + nz*nz) or 1.0
-            normals.append(Vector3(nx/ln, ny/ln, nz/ln))
-        geom.normals = normals
-
-        # Bounding sphere — centre + radius enclosing all verts
-        if verts:
-            cx = sum(v[0] for v in verts) / len(verts)
-            cy = sum(v[1] for v in verts) / len(verts)
-            cz = sum(v[2] for v in verts) / len(verts)
-            radius = max(math.sqrt((v[0]-cx)**2 + (v[1]-cy)**2 + (v[2]-cz)**2)
-                         for v in verts)
-            geom.bounding_sphere = BoundingSphere(center=Vector3(cx, cy, cz),
-                                                   radius=radius)
-
-        geom_index = len(model.geometries)
-        model.geometries.append(geom)
-
-        # New geometry needs a frame + atomic to attach to so the frame
-        # hierarchy / Model Viewer can see it; attach to the root frame.
-        model.atomics.append(Atomic(frame_index=0, geometry_index=geom_index))
-
-        # Refresh viewport / mesh list
-        self._display_dff_model(model)
-        self._update_select_mode_availability()
-        mw = self.main_window
-        if mw and hasattr(mw, 'log_message'):
-            mw.log_message(
-                f"Primitive '{name}': {len(verts)} verts, {len(tris)} tris added to DFF")
 
 
     def _create_left_panel(self): #vers 7
@@ -12310,8 +8539,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # Save
         self.save_col_btn = _icon_btn(
             self.icon_factory.save_icon(color=icon_color),
-            "Save current file",
-            self._save_file)
+            "Save changed IPLs, or the open model (Ctrl+S)",
+            self._save_map_or_model)
         btn_layout.addWidget(self.save_col_btn)
 
         # Import (other formats)
@@ -12379,7 +8608,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # all), so relying solely on self.resizeEvent() left the compact
         # check stuck at whatever it computed on first layout - possibly
         # wrong, and never re-evaluated afterwards.
-        from PyQt6.QtWidgets import QFrame as _QFrameForResize
         _orig_mid_resize = self._middle_btn_row.resizeEvent
         def _mid_btn_row_resize(event, _orig=_orig_mid_resize):  #vers 1
             _orig(event)
@@ -12477,28 +8705,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         return self._frame_tree_panel
 
-    def _toggle_dock_floating(self, dock): #vers 1
-        """Toggle a dock's floating state, explicitly positioning/sizing
-        and raising the resulting floating window. Plain setFloating()
-        alone can leave a dock with a custom title bar at an odd,
-        overlapping, or effectively invisible position/size - looking
-        like nothing happened to the target dock, while its neighbours
-        still visibly resize to fill the space it vacated (which is
-        what actually tipped this off - the dock genuinely was floating,
-        just not anywhere the user could see it)."""
-        was_floating = dock.isFloating()
-        dock.setFloating(not was_floating)
-        if not was_floating:
-            # Just floated - make sure it's a reasonable size and visibly
-            # placed near this workshop's own window, then bring it to front.
-            if dock.width() < 200 or dock.height() < 150:
-                dock.resize(320, 400)
-            anchor = self.mapToGlobal(self.rect().center())
-            dock.move(anchor.x() - dock.width() // 2,
-                      anchor.y() - dock.height() // 2)
-            dock.show()
-            dock.raise_()
-            dock.activateWindow()
 
     def _make_dock_collapsible(self, dock, title): #vers 4
         """Custom title bar for a QDockWidget: double-click anywhere on the
@@ -12710,7 +8916,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._info_ribbon_location[key] = location
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             try:
                 data = json.loads(path.read_text())
@@ -12724,7 +8929,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             pass
         self._set_status(f"Model Info ribbon moved to {location} panel")
 
-    def _create_right_panel(self): #vers 15
+    def _create_right_panel(self): #vers 16
         """Right panel using QMainWindow + QToolBar for native docking.
         QMainWindow handles toolbar placement, row stacking, floating, and
         save/restore natively — same system Gwenview/KDE apps use."""
@@ -12813,7 +9018,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             saved_skybox = self.map_settings.get('skybox_path')
             if saved_skybox:
                 self.preview_widget.set_skybox_path(saved_skybox)
-        # Real fix (Aug 20 2026, per Keith: "the timecyc.dat also has a
+        #  fix (Aug 20 2026,  "the timecyc.dat also has a
         # fixed path, but the radar loads fine across the game
         # versions") - removed the startup restore of a previously-
         # saved timecyc_path here. Auto-detection already re-runs on
@@ -12850,8 +9055,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.preview_widget.set_water2_x_offset(float(self.map_settings.get('water2_x_offset')))
         if hasattr(self.preview_widget, 'set_water2_y_offset'):
             self.preview_widget.set_water2_y_offset(float(self.map_settings.get('water2_y_offset')))
-        if hasattr(self.preview_widget, 'set_water2_offset_vc_only'):
-            self.preview_widget.set_water2_offset_vc_only(bool(self.map_settings.get('water2_offset_vc_only')))
+        if hasattr(self.preview_widget, 'set_water2_offset_mode'):
+            self.preview_widget.set_water2_offset_mode(self._water2_offset_mode())
         if hasattr(self.preview_widget, 'set_camera_state'):
             self.preview_widget.set_camera_state(
                 dist=self.map_settings.get('viewport_dist'),
@@ -12872,6 +9077,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # construction (Aug 18 2026)
         if hasattr(self.preview_widget, 'set_ipl_drag_callback'):
             self.preview_widget.set_ipl_drag_callback(self._on_ipl_dragged)
+        # Single-object move gizmo (Sep 23 2026)
+        if hasattr(self.preview_widget, 'set_gizmo_move_callback'):
+            self.preview_widget.set_gizmo_move_callback(self._on_gizmo_moved)
+            self.preview_widget.set_gizmo_rotate_callback(self._on_gizmo_rotated)
+            self.preview_widget.set_selection_callback(self._on_viewport_selection)
+            self.preview_widget.set_model_drop_callback(self._on_model_dropped)
         # Wire the Move/Rotate click callback too (Aug 19 2026)
         if hasattr(self.preview_widget, 'set_ipl_click_callback'):
             self.preview_widget.set_ipl_click_callback(self._on_ipl_click_for_move_or_rotate)
@@ -12887,7 +9098,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 bool(self.map_settings.get('auto_highlight_hover')))
         if hasattr(self.preview_widget, 'set_hover_context_callback'):
             self.preview_widget.set_hover_context_callback(self._on_hover_context_menu)
-        # Middle-click cycle (Aug 21 2026, per Keith: "middle click
+        # Middle-click cycle (Aug 21 2026,  "middle click
         # can cycle?") - same real callback the Cycle Zones button's
         # own left-click already uses.
         if hasattr(self.preview_widget, 'set_middle_click_cycle_callback'):
@@ -12906,6 +9117,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Build all toolbars and add to the inner QMainWindow
         self._build_toolbars(inner_mw, icon_color)
+        self._apply_custom_icons()
 
         outer_layout.addWidget(inner_mw, stretch=1)
 
@@ -12919,7 +9131,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         return panel
 
-    def _build_toolbars(self, mw: 'QMainWindow', icon_color: str): #vers 7
+    def _build_toolbars(self, mw: 'QMainWindow', icon_color: str): #vers 13
         """Build all QToolBar instances using QAction.
         Icon set resolved once — 'default' uses SVGIconFactory with currentColor,
         '3dsmax' uses MaxIconSet with hardcoded Max palette."""
@@ -13019,7 +9231,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._sel_face_act.setChecked(True)
         self._select_mode_group = sel_group
 
-        # Hidden - Model Workshop icon, per Keith (Aug 20 2026)
+        # Hidden - Model Workshop icon,  (Aug 20 2026)
         for a in (self._sel_vert_act, self._sel_edge_act,
                   self._sel_face_act, self._sel_poly_act):
             a.setVisible(False)
@@ -13041,7 +9253,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
              self.icon_factory.view_icon,
              lambda v: self._toggle_front_only_paint(),
              checkable=True, attr='_front_paint_act')
-        # Hidden - Model Workshop icon, per Keith (Aug 20 2026)
+        # Hidden - Model Workshop icon,  (Aug 20 2026)
         self._front_paint_act.setVisible(False)
 
         # - Ribbon 2: Snap Targets
@@ -13091,11 +9303,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # exists anywhere in this viewport yet to snap an edge to, and
         # faking it with an arbitrary offset would be worse than
         # admitting it isn't built.
-        self._snap_edge_act.setEnabled(False)
         self._snap_edge_act.setToolTip(
-            "Not yet available - needs each model's own loaded\n"
-            "geometry bounding box, which this viewport doesn't\n"
-            "compute yet. Snap: Centre of Model is fully working.")
+            "Snap moved objects side-to-side, on top of, or centre-to-centre\n"
+            "with nearby objects (model bounding boxes). Snapped neighbours\n"
+            "light up green; the controller rumbles on contact.")
         self._snap_centre_act.setToolTip(
             "While dragging a whole IPL, snaps the clicked instance's\n"
             "position to align exactly with the nearest other\n"
@@ -13113,7 +9324,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
              _icon(lambda color=icon_color: MaxSVGIcons.snap_percent_icon(
                  size=20, color=color), 'snap_percent_icon'),
              checkable=True, attr='_snap_percent_act')
-        # Hidden - Model Workshop icons, per Keith (Aug 20 2026)
+        # Hidden - Model Workshop icons,  (Aug 20 2026)
         for a in (self._snap_axis_act, self._snap_angle_act, self._snap_percent_act):
             a.setVisible(False)
 
@@ -13123,7 +9334,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
              _icon(lambda color=icon_color: MaxSVGIcons.mirror_icon(
                  size=20, color=color), 'mirror_icon'),
              callback=self._mirror_dialog, attr='_mirror_act')
-        # Hidden - Model Workshop icon, per Keith (Aug 20 2026)
+        # Hidden - Model Workshop icon,  (Aug 20 2026)
         self._mirror_act.setVisible(False)
         _act(tb_geo, "Align",
              _icon(lambda color=icon_color: MaxSVGIcons.align_icon(
@@ -13157,7 +9368,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         _act(tb_nav, "4-Pane View",
              _icon(self.icon_factory.quad_view_icon, 'quad_view_icon'),
              self._toggle_quad_view, checkable=True, attr='_quad_view_act')
-        # Hidden - Model Workshop icon, per Keith (Aug 20 2026)
+        # Hidden - Model Workshop icon,  (Aug 20 2026)
         self._quad_view_act.setEnabled(False)
         self._quad_view_act.setVisible(False)
         self._quad_view_act.setToolTip(
@@ -13167,7 +9378,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # - Ribbon 5: Render
         tb_rend = _tb("Render", Qt.ToolBarArea.RightToolBarArea)
-        # New "Overlays" ribbon (Aug 20 2026, per Keith: "The New Icons
+        # New "Overlays" ribbon (Aug 20 2026,  "The New Icons
         # on the IPL Control pane, can be moved to the ribbon" - the
         # arrow in his own screenshot pointed from IPL Controls' own
         # overlay toggle buttons up to this same top toolbar area).
@@ -13177,7 +9388,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # and moved in here afterwards, deferred, by _move_overlay_
         # buttons_to_ribbon.
         tb_overlays = _tb("Overlays", Qt.ToolBarArea.RightToolBarArea)
-        # Cycle Zones/Cull (Aug 21 2026, per Keith: "on zons we could
+        # Water depth gang (26px): same blue scale as the water cells
+        from apps.components.Water_Editor.water_workshop import WaterZGauge
+        tb_depth = _tb("Water Depth", Qt.ToolBarArea.RightToolBarArea)
+        tb_depth.setStyleSheet("QToolBar { padding: 0px; spacing: 0px; }")
+        self._water_gauge = WaterZGauge(_MapWaterDepth(self))
+        tb_depth.addWidget(self._water_gauge)
+        from apps.methods.ribbon_system import RibbonMixin as _RM
+        tb_depth._side = (self._water_gauge, 26, 0)       # turns with the ribbon
+        tb_depth.orientationChanged.connect(lambda _o, t=tb_depth: _RM.ribbon_fit_side(t))
+        _RM.ribbon_fit_side(tb_depth)
+        self._vp_gauges = _ViewportGauges(self, pw)       # middle left/right of the view
+        # Cycle Zones/Cull (Aug 21 2026,  "on zons we could
         # also cycle through the entries list, and show the zon box
         # highlighted, with right click options, this would be a
         # failback, other then clicking on the zon box" - moved here,
@@ -13192,7 +9414,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # with its own custom right-click menu, not a show/hide
         # overlay toggle, so it doesn't fit that shared mechanism.
         cycle_zones_btn = QToolButton()
-        cycle_zones_btn.setText("Cycle")
+        from apps.components.Map_Editor.depends.overlay_icons import OverlayIcons as _OverlayIconsForCycle
+        cycle_zones_btn.setIcon(_OverlayIconsForCycle.cycle_icon(24))
         cycle_zones_btn.setToolTip(
             "Left-click: step to the next cull/zone box.\n"
             "Right-click: pick one directly from a list.\n\n"
@@ -13205,10 +9428,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         tb_overlays.addWidget(cycle_zones_btn)
 
         # Add/Delete/Save for Zon/Cull/Occlusion/Garage (Aug 21 2026,
-        # per Keith: "we need to finish the add, del, save functions
+        #  "we need to finish the add, del, save functions
         # for zon" / "lets build add, del for zon, cull, occu and ipl
         # changes" / "both if you can") moved off the ribbon entirely
-        # (Aug 21 2026, per Keith's own follow-up: "the new buttons,
+        # (Aug 21 2026  own follow-up: "the new buttons,
         # +zon, -zon, and save zon... add these to the svg icon zon
         # button with a middle-click, and move those functions over.
         # Same with cull, occl, auzo, grge") - each is now on its own
@@ -13217,7 +9440,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # show_occl_btn/show_grge_btn's own middle_clicked wiring,
         # and _show_overlay_middle_click_menu).
 
-        # Undo (Aug 21 2026, per Keith: "we need an undo button
+        # Undo (Aug 21 2026,  "we need an undo button
         # /ribbon icon") - the real, map-undo-aware handler (_on_
         # undo_clicked, wired to Ctrl+Z/Ctrl+Y earlier this session)
         # was previously only reachable from inside the Item Editor
@@ -13231,32 +9454,37 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         undo_ribbon_btn.clicked.connect(self._on_undo_ribbon_clicked)
         tb_overlays.addWidget(undo_ribbon_btn)
 
-        # Repair zero-scale instances (Aug 21 2026, per Keith's own
+        # Repair zero-scale instances (Aug 21 2026  own
         # real, worked VC/SA/SOL example lines: "so we need a function
         # to find and change 1, 1, 1, to 0, 0, 0 ... but I can see
         # there is an error in how I converted the files") - fixes any
         # instance whose scale is (0,0,0) back to (1,1,1) (see repair_
         # zero_scale_inst_fields's own docstring for the full, real
         # "why 0,0,0 and not the other direction" reasoning - a real
-        # zero scale is never correct, unlike Keith's own hand-typed
+        # zero scale is never correct, unlike my own hand-typed
         # example which had the direction backwards).
         #
         # Scope note: a real, correct SA<->VC line converter (convert_
         # inst_fields, gta_dat_parser.py) is already built and tested
-        # against Keith's own real example lines, but wiring it up to
+        # against my own real example lines, but wiring it up to
         # actually convert and write back every real instance in a
         # loaded world is a separate, much larger piece (needs its own
         # real INST-section write-back infrastructure, unlike zone/
         # cull/occl/grge's own much smaller sections) - not attempted
         # this turn; this button covers the repair half only.
         repair_scale_btn = QToolButton()
-        repair_scale_btn.setText("Repair Scale")
+        from apps.components.Map_Editor.depends.overlay_icons import OverlayIcons as _OverlayIconsForRepair
+        repair_scale_btn.setIcon(_OverlayIconsForRepair.repair_scale_icon(24))
         repair_scale_btn.setToolTip(
-            "Fix any instance whose scale is (0,0,0) back to (1,1,1).")
+            "Left-click: fix any instance whose scale is (0,0,0) back to (1,1,1).\n"
+            "Right-click: choose a direction (also covers 1,1,1 -> 0,0,0).")
         repair_scale_btn.clicked.connect(self._repair_zero_scale_instances)
+        repair_scale_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        repair_scale_btn.customContextMenuRequested.connect(
+            lambda pos, b=repair_scale_btn: self._show_repair_scale_menu(b))
         tb_overlays.addWidget(repair_scale_btn)
 
-        # Convert VC<->SA/SOL INST format (Aug 21 2026, per Keith:
+        # Convert VC<->SA/SOL INST format (Aug 21 2026, .per:
         # "having VC -> SA or SA -> VC is something I need, under a
         # convertion SVG icon, right clicked for options, and selected
         # ipl files to convert, anywhere on the harddrive or loaded
@@ -13276,7 +9504,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         convert_btn.clicked.connect(lambda: self._show_convert_ipl_menu(convert_btn))
         tb_overlays.addWidget(convert_btn)
 
-        # Optimize Load Order (Aug 21 2026, per Keith: "if the model
+        # Optimize Load Order (Aug 21 2026,  "if the model
         # names, col names, and ide/ipl entries loaded in the same
         # order the game spends less work matching them up, result is
         # the game loads and renders faster. the SOL files have been
@@ -13291,7 +9519,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # .dat file's own directive lines only, not real model/
         # instance order within an IDE/IPL file's own real contents).
         optimize_btn = QToolButton()
-        optimize_btn.setText("Optimize Order")
+        from apps.components.Map_Editor.depends.overlay_icons import OverlayIcons as _OverlayIconsForOptimize
+        optimize_btn.setIcon(_OverlayIconsForOptimize.optimize_icon(24))
         optimize_btn.setToolTip(
             "Reorder this world's own loaded .dat file's IDE/IPL/COLFILE/IMG\n"
             "lines to match Rockstar's own documented convention: grouped by\n"
@@ -13299,6 +9528,43 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "own files already use.")
         optimize_btn.clicked.connect(self._optimize_dat_load_order_clicked)
         tb_overlays.addWidget(optimize_btn)
+
+        # Search loaded instances by model name (Sep 5 2026, per
+        #  : "a search [O'] function on the ribbon bar to find a
+        # model name so I can see the IPL line") - directly reuses
+        # the same real fix just made to the wrong-instance lookup
+        # bug (matches by name, disambiguates results the same way
+        # the Object Browser's own model-click already does).
+        search_btn = QToolButton()
+        search_btn.setIcon(_OverlayIconsForOptimize.search_model_icon(24))
+        search_btn.setToolTip("Search loaded instances by model name")
+        search_btn.clicked.connect(self._show_model_search_dialog)
+        tb_overlays.addWidget(search_btn)
+
+        # Force Prelighting (Sep 5 2026,  "showing dark
+        # models. I think some models might not be loading the
+        # prelighting, so we need a prelighting on/off SVG button") -
+        # wires DFFViewport.set_prelight, an override that already
+        # existed and is already used by Vehicle Workshop/Model Viewer
+        # (self._use_prelight), just never wired into this workshop's
+        # own ribbon. Forces baked vertex-colour lighting on
+        # regardless of a model's own geom_flags detection, which only
+        # ever uses its first geometry's flags for the whole merged
+        # model (same known simplification as DFFViewport.load_all_
+        # geometries) - multi-geometry objects where a later geometry
+        # actually needs prelighting but the first one doesn't can end
+        # up rendered dark via real-time lighting instead. This is a
+        # manual escape hatch for exactly that case, not an attempt at
+        # fixing the underlying per-geometry detection.
+        prelight_btn = QToolButton()
+        prelight_btn.setCheckable(True)
+        prelight_btn.setIcon(_OverlayIconsForOptimize.prelight_icon(24))
+        prelight_btn.setToolTip(
+            "Force baked vertex-colour (pre-lit) lighting on for every\n"
+            "model, instead of each model's own auto-detected lighting -\n"
+            "use this if a model is rendering unexpectedly dark.")
+        prelight_btn.toggled.connect(self._on_toggle_force_prelight)
+        tb_overlays.addWidget(prelight_btn)
 
         _act(tb_rend, "Render Settings",
              _icon(self.icon_factory.render_settings_icon, 'render_settings_icon'),
@@ -13387,7 +9653,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         slider.setSingleStep(2)
         try:
             import json
-            from pathlib import Path
             data = json.loads((_model_workshop_config_dir() / 'model_workshop.json').read_text())
             slider.setValue(data.get('icon_scale', 20))
         except Exception:
@@ -13427,7 +9692,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Save icon set choice and rebuild toolbars to apply it."""
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             try:
                 data = json.loads(path.read_text())
@@ -13444,14 +9708,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Remove all existing toolbars and rebuild with the current
         icon set.
 
-        Real fix (Aug 20 2026, per Keith: "The New Icons on the IPL
+         fix (Aug 20 2026,  "The New Icons on the IPL
         Control pane, can be moved to the ribbon") - the overlay
         toggle buttons (Water/Radar/Tcyc/etc.) now live as real child
         widgets of the "Overlays" toolbar (_move_overlay_buttons_to_
         ribbon), not QActions rebuilt fresh by _build_toolbars itself
         - deleteLater() on that toolbar would have deleted those real
         buttons right along with it, permanently, the next time
-        Keith changed icon sets. Re-parents them to self first (kept
+          changed icon sets. Re-parents them to self first (kept
         alive, off-screen) before any toolbar is destroyed, then
         re-adds them to the freshly rebuilt "Overlays" toolbar
         afterwards."""
@@ -13467,6 +9731,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._ribbon_actions = []
         icon_color = self._get_icon_color()
         self._build_toolbars(mw, icon_color)
+        self._apply_custom_icons()
         self._move_overlay_buttons_to_ribbon()
         self._apply_ipl_controls_display_style()
         self._set_status(f"Icon set applied")
@@ -13481,7 +9746,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 tb.setIconSize(QSize(px, px))
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             try:
                 data = json.loads(path.read_text())
@@ -13492,10 +9756,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception:
             pass
 
-    def open_ribbon_manager(self): #vers 1
-        """Open the Ribbon Manager dialog."""
-        dlg = RibbonManagerDialog(self, parent=self)
-        dlg.exec()
+    def _ribbon_config_path(self): #vers 1
+        """Ribbon layout, presets and custom icons file."""
+        return _model_workshop_config_dir() / 'model_workshop.json'
 
     def _get_or_create_hidden_toolbar(self): #vers 1
         """Return the special "Hidden" toolbar, creating it, if it
@@ -13525,7 +9788,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             try:
                 data = json.loads(path.read_text())
@@ -13549,17 +9811,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         restore (Qt's own toolbar-name hashing does this invisibly and
         without any way to detect success/failure).
 
-        Real fix (Aug 20 2026, per Keith: "I've noticed moving icons
+         fix (Aug 20 2026,  "I've noticed moving icons
         to hidden, and save, these movements dont get saved") - the
         real "Hidden" toolbar is only ever created lazily, the first
         time the Ribbon Manager dialog itself opens (_get_or_create_
         hidden_toolbar) - it genuinely didn't exist yet at either of
         this method's own real call times (both fire from startup
-        timers, well before Keith would have opened that dialog even
+        timers, well before   would have opened that dialog even
         once this session). Qt's own restoreState() can only
         reassociate a saved button with a toolbar object that already
         exists at the moment it's called - with no real "Hidden"
-        toolbar object to hand icons back to, any icon Keith had
+        toolbar object to hand icons back to, any icon   had
         moved there and saved was silently dropped back to whichever
         toolbar it started in, every single time. Creating it here
         first, unconditionally, before restoreState() runs, ensures
@@ -13570,7 +9832,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._get_or_create_hidden_toolbar()
         try:
             import json
-            from pathlib import Path
             from PyQt6.QtCore import QByteArray
             path = _model_workshop_config_dir() / 'model_workshop.json'
             if not path.exists():
@@ -13625,7 +9886,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             try:
                 data = json.loads(path.read_text())
@@ -13645,7 +9905,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         try:
             import json
-            from pathlib import Path
             from PyQt6.QtCore import QByteArray
             path = _model_workshop_config_dir() / 'model_workshop.json'
             if path.exists():
@@ -13678,7 +9937,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # _inner_mw.
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             if path.exists():
                 data = json.loads(path.read_text())
@@ -14040,24 +10298,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception:
             pass
 
-    def _flip_vertical_all(self): #vers 1
-        """Flip vertically - applied to every visible viewport (single or
-        all 4 quad panes), so the transform isn't lost when only preview_widget
-        used to be touched."""
-        for vp in self._live_viewports():
-            vp.flip_vertical()
 
-    def _flip_horizontal_all(self): #vers 1
-        for vp in self._live_viewports():
-            vp.flip_horizontal()
 
-    def _rotate_cw_all(self): #vers 1
-        for vp in self._live_viewports():
-            vp.rotate_cw()
 
-    def _rotate_ccw_all(self): #vers 1
-        for vp in self._live_viewports():
-            vp.rotate_ccw()
 
     def _live_viewports(self): #vers 1
         """All currently active DFF viewport instances - just preview_widget
@@ -14163,300 +10406,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 # - Rest of the logic for the panels
 
 
-    def _pan_preview(self, dx, dy): #vers 2
-        """Pan preview by dx, dy pixels - FIXED"""
-        if hasattr(self, 'preview_widget') and self.preview_widget:
-            self.preview_widget.pan(dx, dy)
 
 
-    def _pick_background_color(self): #vers 2
-        """Open color picker for background"""
-        vp = getattr(self, 'preview_widget', None)
-        current = vp._get_bg_color() if vp is not None and hasattr(vp, '_get_bg_color') else Qt.GlobalColor.black
-        color = QColorDialog.getColor(current, self, "Pick Background Color")
-        if color.isValid():
-            self.preview_widget.set_background_color(color)
 
 
-    def _set_checkerboard_bg(self): #vers 1
-        """Set checkerboard background"""
-        # Create checkerboard pattern
-        self.preview_widget.setStyleSheet("""
-            border: 1px solid palette(mid);
-            background-image:
-                linear-gradient(45deg, #333 25%, transparent 25%),
-                linear-gradient(-45deg, #333 25%, transparent 25%),
-                linear-gradient(45deg, transparent 75%, #333 75%),
-                linear-gradient(-45deg, transparent 75%, #333 75%);
-            background-size: 20px 20px;
-            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-        """)
 
 
-    def _create_level_card(self, level_data): #vers 2
-        """Create modern level card matching mockup"""
-        card = QFrame()
-        card.setFrameStyle(QFrame.Shape.StyledPanel)
-        card.setStyleSheet("""
-            QFrame {
-                background: palette(base);
-                border: 1px solid palette(mid);
-                border-radius: 5px;
-            }
-            QFrame:hover {
-                border-color: palette(highlight);
-                background: palette(base);
-            }
-        """)
-        card.setMinimumHeight(140)
 
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
-
-        # Preview thumbnail
-        preview_widget = self._create_preview_widget(level_data)
-        layout.addWidget(preview_widget)
-
-        # Level info section
-        info_section = self._create_info_section(level_data)
-        layout.addWidget(info_section, stretch=1)
-
-        # Action buttons
-        action_section = self._create_action_section(level_data)
-        layout.addWidget(action_section)
-
-        return card
-
-
-    def _create_preview_widget(self, level_data=None): #vers 5
-        """Create preview widget - CollisionPreviewWidget for col_workshop"""
-        if level_data is None:
-            # Return collision preview widget for main preview area
-            preview = CollisionPreviewWidget(self)
-            print(f"Created CollisionPreviewWidget: {type(preview)}")  # ADD THIS
-            return preview
-
-        # Original logic with level_data for mipmap/level cards (if needed)
-        level_num = level_data.get('level', 0)
-        width = level_data.get('width', 0)
-        height = level_data.get('height', 0)
-        rgba_data = level_data.get('rgba_data')
-        preview_size = max(45, 120 - (level_num * 15))
-
-        preview = QLabel()
-        preview.setFixedSize(preview_size, preview_size)
-        preview.setStyleSheet("""
-            QLabel {
-                background: palette(base);
-                border: 2px solid palette(mid);
-                border-radius: 3px;
-            }
-        """)
-        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        if rgba_data and width > 0:
-            try:
-                image = QImage(rgba_data, width, height, width * 4, QImage.Format.Format_RGBA8888)
-                if not image.isNull():
-                    pixmap = QPixmap.fromImage(image)
-                    scaled_pixmap = pixmap.scaled(
-                        preview_size - 10, preview_size - 10,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    preview.setPixmap(scaled_pixmap)
-            except:
-                preview.setText("No Data")
-        else:
-            preview.setText("No Data")
-
-        return preview
-
-
-    def _create_info_section(self, level_data): #vers 1
-        """Create info section with stats grid"""
-        info_widget = QWidget()
-        layout = QVBoxLayout(info_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        # Header with level number and dimensions
-        header_layout = QHBoxLayout()
-
-        level_num = level_data.get('level', 0)
-        level_badge = QLabel(f"Level {level_num}")
-        level_badge.setStyleSheet("""
-            QLabel {
-                background: palette(highlight);
-                color: white;
-                padding: 4px 12px;
-                border-radius: 3px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-        """)
-        header_layout.addWidget(level_badge)
-
-        width = level_data.get('width', 0)
-        height = level_data.get('height', 0)
-        dim_label = QLabel(f"{width} x {height}")
-        dim_label.setStyleSheet("font-size: 16px; font-weight: bold; color: palette(windowText);")
-        header_layout.addWidget(dim_label)
-
-        # Main indicator
-        if level_num == 0:
-            main_badge = QLabel("Main Surface")
-            main_badge.setStyleSheet("color: palette(windowText); font-size: 12px;")
-            header_layout.addWidget(main_badge)
-
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
-
-        # Stats grid
-        stats_grid = self._create_stats_grid(level_data)
-        layout.addWidget(stats_grid)
-
-        return info_widget
-
-
-    def _create_stats_grid(self, level_data): #vers 1
-        """Create stats grid"""
-        grid_widget = QWidget()
-        grid_layout = QHBoxLayout(grid_widget)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(8)
-
-        fmt = level_data.get('format', self.collision_data.get('format', 'Unknown'))
-        size = level_data.get('compressed_size', 0)
-        size_kb = size / 1024
-
-        # Format stat
-        format_stat = self._create_stat_box("Format:", fmt)
-        grid_layout.addWidget(format_stat)
-
-        # Size stat
-        size_stat = self._create_stat_box("Size:", f"{size_kb:.1f} KB")
-        grid_layout.addWidget(size_stat)
-        grid_layout.addWidget(comp_stat)
-
-        # Status stat
-        is_modified = level_data.get('level', 0) in self.modified_levels
-        status_text = "⚠ Modified" if is_modified else "✓ Valid"
-        status_color = "#ff9800" if is_modified else "#4caf50"
-        status_stat = self._create_stat_box("Status:", status_text, status_color)
-        grid_layout.addWidget(status_stat)
-
-        return grid_widget
-
-
-    def _create_stat_box(self, label, value, value_color="#e0e0e0"): #vers 1
-        """Create individual stat box"""
-        stat = QFrame()
-        stat.setStyleSheet("""
-            QFrame {
-                background: palette(base);
-                border-radius: 3px;
-                padding: 6px 10px;
-            }
-        """)
-
-        layout = QHBoxLayout(stat)
-        layout.setContentsMargins(8, 4, 8, 4)
-
-        label_widget = QLabel(label)
-        label_widget.setStyleSheet("color: palette(placeholderText); font-size: 12px;")
-        layout.addWidget(label_widget)
-
-        value_widget = QLabel(value)
-        value_widget.setStyleSheet(f"color: {value_color}; font-weight: bold; font-size: 12px;")
-        layout.addWidget(value_widget)
-
-        return stat
-
-
-    def _create_action_section(self, level_data): #vers 1
-        """Create action buttons section"""
-        action_widget = QWidget()
-        layout = QVBoxLayout(action_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-
-        level_num = level_data.get('level', 0)
-
-        # Export button
-        export_btn = QPushButton("Export")
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background: #2e5d2e;
-                border: 1px solid #3d7d3d;
-                color: white;
-                padding: 6px 12px;
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: #3d7d3d;
-            }
-        """)
-        export_btn.clicked.connect(lambda: self._export_level(level_num))
-        layout.addWidget(export_btn)
-
-        # Import button
-        import_btn = QPushButton("Import")
-        import_btn.setStyleSheet("""
-            QPushButton {
-                background: #5d3d2e;
-                border: 1px solid #7d4d3d;
-                color: white;
-                padding: 6px 12px;
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: #7d4d3d;
-            }
-        """)
-        import_btn.clicked.connect(lambda: self._import_level(level_num))
-        layout.addWidget(import_btn)
-
-        # Delete button (not for level 0) or Edit button (for level 0)
-        if level_num == 0:
-            edit_btn = QPushButton("Edit")
-            edit_btn.setStyleSheet("""
-                QPushButton {
-                    background: palette(mid);
-                    border: 1px solid palette(mid);
-                    color: white;
-                    padding: 6px 12px;
-                    border-radius: 3px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background: palette(mid);
-                }
-            """)
-            edit_btn.clicked.connect(self._edit_main_surface)
-            layout.addWidget(edit_btn)
-        else:
-            delete_btn = QPushButton("Delete")
-            delete_btn.setStyleSheet("""
-                QPushButton {
-                    background: #5d2e2e;
-                    border: 1px solid #7d3d3d;
-                    color: white;
-                    padding: 6px 12px;
-                    border-radius: 3px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background: #7d3d3d;
-                }
-            """)
-            delete_btn.clicked.connect(lambda: self._delete_level(level_num))
-            layout.addWidget(delete_btn)
-
-        return action_widget
 
 
 # - Marker 5
@@ -14482,14 +10438,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
 
 # - Marker 6
-
-    def _open_settings_dialog(self): #vers 1
-        """Open settings dialog and refresh on save"""
-        dialog = SettingsDialog(self.mel_settings, self)
-        if dialog.exec():
-            # Refresh platform list with new ROM path
-            self._scan_platforms()
-            self.status_label.setText("Settings saved - platforms refreshed")
 
 
     def _launch_theme_settings(self): #vers 2
@@ -14526,21 +10474,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             QMessageBox.warning(self, "Theme Error", f"Could not load theme system:\n{e}")
 
 
-    def _setup_settings_button(self): #vers 1
-        """Setup settings button in UI"""
-        settings_btn = QPushButton("âš™ Settings")
-        settings_btn.clicked.connect(self._open_settings_dialog)
-        settings_btn.setMaximumWidth(120)
-        return settings_btn
 
-
-    def _show_settings_dialog(self): #vers 5
+    def _show_settings_dialog(self): #vers 7
         """Show comprehensive settings dialog with all tabs including hotkeys"""
         from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
                                     QWidget, QLabel, QPushButton, QGroupBox,
                                     QCheckBox, QSpinBox, QFormLayout, QScrollArea,
                                     QKeySequenceEdit, QComboBox, QMessageBox)
-        from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QKeySequence
 
         dialog = QDialog(self)
@@ -14903,7 +10843,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Collision Operations Group
         coll_group = QGroupBox("Collision Operations")
-        coll_group = QFormLayout()
+        coll_form = QFormLayout()
 
         hotkey_edit_import = QKeySequenceEdit(self.hotkey_import.key() if hasattr(self, 'hotkey_import') else QKeySequence("Ctrl+I"))
         coll_form.addRow("Import Collision:", hotkey_edit_import)
@@ -15006,8 +10946,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
             # Apply export settings
             self.default_export_format = format_combo.currentText()
-            self.export_preserve_alpha = preserve_alpha_check.isChecked()
-            self.export_shadow_separate = export_shadow_check.isChecked()
+            self.export_preserve_shadow = preserve_shadow_check.isChecked()
+            self.export_shadow_separate = export_shadowm_check.isChecked()
             self.export_create_subfolders = create_subfolders_check.isChecked()
             # Texture Sources — texlist folder
             new_texlist = texlist_edit.text().strip()
@@ -15016,18 +10956,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 self._save_texlist_setting()
 
             # Apply import settings
-            self.import_auto_name = auto_name_check.isChecked()
             self.import_replace_existing = replace_check.isChecked()
             self.import_auto_format = auto_format_check.isChecked()
             self.default_import_format = import_format_combo.currentText()
 
             # Apply constraint settings
-            self.dimension_limiting_enabled = dimension_check.isChecked()
-            self.splash_screen_mode = splash_check.isChecked()
-            self.custom_max_dimension = max_dim_spin.value()
             self.name_limit_enabled = name_limit_check.isChecked()
             self.max_surface_name_length = char_limit_spin.value()
-            self.iff_import_enabled = iff_check.isChecked()
 
             # Apply hotkeys
             if hasattr(self, 'hotkey_open'):
@@ -15091,7 +11026,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         dialog.exec()
 
 
-    def _show_settings_context_menu(self, pos): #vers 1
+    def _show_settings_context_menu(self, pos): #vers 2
         """Show context menu for Settings button"""
         from PyQt6.QtWidgets import QMenu
 
@@ -15124,26 +11059,32 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         menu.addSeparator()
 
         # Icon display mode submenu (icon-only mode uses _update_tex_btn_compact)
-        display_menu = menu.addMenu("Platform Display")
+        display_menu = menu.addMenu("Button Display")
 
         icons_text_action = display_menu.addAction("Icons & Text")
         icons_text_action.setCheckable(True)
-        icons_text_action.setChecked(self.icon_display_mode == "icons_and_text")
-        icons_text_action.triggered.connect(lambda: self._set_icon_display_mode("icons_and_text"))
+        icons_text_action.setChecked(self.button_display_mode == 'both')
+        icons_text_action.triggered.connect(lambda: self._set_icon_display_mode('both'))
 
         icons_only_action = display_menu.addAction("Icons Only")
         icons_only_action.setCheckable(True)
-        icons_only_action.setChecked(self.icon_display_mode == "icons_only")
-        icons_only_action.triggered.connect(lambda: self._set_icon_display_mode("icons_only"))
+        icons_only_action.setChecked(self.button_display_mode == 'icons')
+        icons_only_action.triggered.connect(lambda: self._set_icon_display_mode('icons'))
 
         text_only_action = display_menu.addAction("Text Only")
         text_only_action.setCheckable(True)
-        text_only_action.setChecked(self.icon_display_mode == "text_only")
-        text_only_action.triggered.connect(lambda: self._set_icon_display_mode("text_only"))
+        text_only_action.setChecked(self.button_display_mode == 'text')
+        text_only_action.triggered.connect(lambda: self._set_icon_display_mode('text'))
 
         # Show menu at button position
-        menu.exec(self.settings_btn.mapToGlobal(pos))
+        menu.exec(self.properties_btn.mapToGlobal(pos))
 
+
+    def _set_icon_display_mode(self, mode: str): #vers 1
+        """Set button display mode: both, icons or text."""
+        if mode != self.button_display_mode:
+            self.button_display_mode = mode
+            self._update_all_buttons()
     def _enable_move_mode(self): #vers 2
         """Enable move window mode using system move"""
         handle = self.windowHandle()
@@ -15185,35 +11126,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         lay.addWidget(close_btn)
         dlg.exec()
 
-    def _show_window_context_menu(self, pos): #vers 1
-        """Show context menu for titlebar right-click"""
-        from PyQt6.QtWidgets import QMenu
-
-
-        # Move window action
-        move_action = menu.addAction("Move Window")
-        move_action.triggered.connect(self._enable_move_mode)
-
-        # Maximize/Restore action
-        if self.isMaximized():
-            max_action = menu.addAction("Restore Window")
-        else:
-            max_action = menu.addAction("Maximize Window")
-        max_action.triggered.connect(self._toggle_maximize)
-
-        # Minimize action
-        min_action = menu.addAction("Minimize")
-        min_action.triggered.connect(self.showMinimized)
-
-        menu.addSeparator()
-
-        # Close action
-        close_action = menu.addAction("Close")
-        close_action.triggered.connect(self.close)
-
-        # Show menu at global position
-        menu.exec(self.mapToGlobal(pos))
-
 
     def _get_icon_color(self): #vers 3
         """Get icon colour from current theme — returns text_primary.
@@ -15250,7 +11162,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     @staticmethod
     def _make_world_map_icon(): #vers 2
-        """Real multi-color SVG Earth icon (blue ocean, green-to-yellow
+        """ multi-color SVG Earth icon (blue ocean, green-to-yellow
         continent shapes near the equator)"""
         from PyQt6.QtSvg import QSvgRenderer
         icon = QIcon()
@@ -15265,38 +11177,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             icon.addPixmap(pix)
         return icon
 
-    def _get_ui_color(self, key): #vers 1
-        """Get a theme-aware QColor from app_settings. No hardcoded colors.
-        Genuinely missing from ModelWorkshop until now (Aug 1 2026)"""
-        from PyQt6.QtGui import QColor
-        try:
-            app_settings = getattr(self, 'app_settings', None) or \
-                getattr(getattr(self, 'main_window', None), 'app_settings', None)
-            if app_settings and hasattr(app_settings, 'get_ui_color'):
-                return app_settings.get_ui_color(key)
-        except Exception:
-            pass
-        # Palette fallback - no hardcoded values
-        pal = self.palette()
-        if key == 'viewport_bg':
-            return pal.color(pal.ColorRole.Base)
-        if key == 'viewport_text':
-            return pal.color(pal.ColorRole.PlaceholderText)
-        return pal.color(pal.ColorRole.WindowText)
+    def _get_ui_color(self, key): #vers 2
+        """Theme QColor via shared helper."""
+        from apps.methods.ui_color import get_ui_color
+        return get_ui_color(self, key)
 
-    def _set_render_mode(self, mode: str): #vers 1
-        """Set the actual viewport's render mode (wireframe/solid/etc.)
-        - genuinely missing from ModelWorkshop until now (Aug 1 2026)"""
-        vp = getattr(self, 'preview_widget', None)
-        if vp is not None and hasattr(vp, 'set_render_mode'):
-            vp.set_render_mode(mode)
 
     def _get_icon_set(self) -> str: #vers 1
         """Return active icon set: 'default' or '3dsmax'.
         Read from model_workshop.json 'icon_set' key."""
         try:
             import json
-            from pathlib import Path
             path = _model_workshop_config_dir() / 'model_workshop.json'
             if path.exists():
                 return json.loads(path.read_text()).get('icon_set', 'default')
@@ -15304,37 +11195,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             pass
         return 'default'
 
-
-    def _apply_fonts_to_widgets(self): #vers 1
-        """Apply fonts from AppSettings to all widgets"""
-        if not hasattr(self, 'default_font'):
-            return
-
-        print("\n=== Applying Fonts ===")
-        print(f"Default font: {self.default_font.family()} {self.default_font.pointSize()}pt")
-        print(f"Title font: {self.title_font.family()} {self.title_font.pointSize()}pt")
-        print(f"Panel font: {self.panel_font.family()} {self.panel_font.pointSize()}pt")
-        print(f"Button font: {self.button_font.family()} {self.button_font.pointSize()}pt")
-
-        # Apply default font to main window
-        self.setFont(self.default_font)
-
-        # Apply title font to titlebar
-        if hasattr(self, 'title_label'):
-            self.title_label.setFont(self.title_font)
-
-        # Apply panel font to lists
-        if hasattr(self, 'platform_list'):
-            self.platform_list.setFont(self.panel_font)
-        if hasattr(self, 'game_list'):
-            self.game_list.setFont(self.panel_font)
-
-        # Apply button font to all buttons
-        for btn in self.findChildren(QPushButton):
-            btn.setFont(self.button_font)
-
-        print("Fonts applied to widgets")
-        print("======================\n")
 
 
     def _apply_theme(self): #vers 8
@@ -15359,51 +11219,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             print(f"Theme application error: {e}")
 
 
-    def _apply_settings(self, dialog): #vers 5
-        """Apply settings from dialog"""
-        from PyQt6.QtGui import QFont
-
-        # Store font settings
-        self.title_font = QFont(self.title_font_combo.currentFont().family(), self.title_font_size.value())
-        self.panel_font = QFont(self.panel_font_combo.currentFont().family(), self.panel_font_size.value())
-        self.button_font = QFont(self.button_font_combo.currentFont().family(), self.button_font_size.value())
-        self.infobar_font = QFont(self.infobar_font_combo.currentFont().family(), self.infobar_font_size.value())
-
-        # Apply fonts to specific elements
-        self._apply_title_font()
-        self._apply_panel_font()
-        self._apply_button_font()
-        self._apply_infobar_font()
-        self.default_export_format = format_combo.currentText()
-
-        # Apply button display mode
-        mode_map = ["icons", "text", "both"]
-        new_mode = mode_map[self.settings_display_combo.currentIndex()]
-        if new_mode != self.button_display_mode:
-            self.button_display_mode = new_mode
-            self._update_all_buttons()
-
-        # Locale setting (would need implementation)
-        locale_text = self.settings_locale_combo.currentText()
-
 
 # - Marker 7
-
-    def _refresh_main_window(self): #vers 1
-        """Refresh the main window to show changes"""
-        try:
-            if self.main_window:
-                # Try to refresh the main table
-                if hasattr(self.main_window, 'refresh_table'):
-                    self.main_window.refresh_table()
-                elif hasattr(self.main_window, 'reload_current_file'):
-                    self.main_window.reload_current_file()
-                elif hasattr(self.main_window, 'update_display'):
-                    self.main_window.update_display()
-
-        except Exception as e:
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                self.main_window.log_message(f"Refresh error: {str(e)}")
 
 
 #------ Col functions
@@ -15425,10 +11242,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 f"Import of {ext.upper()} format is not yet implemented.\n"
                 f"Supported: OBJ")
 
-    def _import_obj(self, path: str): #vers 2
+    def _import_obj(self, path: str): #vers 3
         """Import Wavefront OBJ as a new DFF geometry."""
         from PyQt6.QtWidgets import QMessageBox
-        import struct
         verts, uvs, normals, faces = [], [], [], []
         try:
             with open(path, 'r', errors='replace') as fh:
@@ -15451,10 +11267,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             QMessageBox.warning(self, "OBJ Import", "No geometry found in OBJ file.")
             return
         # Build a minimal DFF geometry and add to current model or create new
-        try:
-            from apps.components.Model_Editor.depends.col_3d_viewport import SimpleVert, SimpleFace
-        except ImportError:
-            SimpleVert = SimpleFace = None
         fname = os.path.basename(path)
         self._set_status(f"OBJ imported: {fname} ({len(verts)} verts, {len(faces)} faces)")
         if self.main_window and hasattr(self.main_window, 'log_message'):
@@ -15615,10 +11427,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                             txd_edit.setText(txd_guess)
                             break
 
-        def _pick_txd():  #vers 1
+        def _pick_txd():  #vers 2
             start = os.path.dirname(dff_edit.text()) or start_dir
             p, _ = QFileDialog.getOpenFileName(
-                dlg, "Open TXD", start, "TXD Files (*.txd);;All Files (*)")
+                dlg, "Open TXD", start, "Texture Files (*.txd *.wtd *.nft *.xtx *.chk);;TXD Files (*.txd);;All Files (*)")
             if p:
                 txd_edit.setText(p)
 
@@ -15655,35 +11467,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             # TXD Workshop tool instead.
             self._auto_load_txd_from_imgs()
 
-    def _open_txd_standalone(self): #vers 2
-        """Open a TXD file — loads textures into Model Workshop AND opens TXD Workshop."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open TXD Texture Archive",
-            os.path.dirname(getattr(self, '_current_dff_path', '')),
-            "TXD Files (*.txd);;All Files (*)")
-        if not path:
-            return
-        # Always load internally into the texture panel
-        self._load_txd_file(path)
-        mw = getattr(self, 'main_window', None)
-        if mw and hasattr(mw, 'open_txd_workshop_docked'):
-            # Docked in IMG Factory — open as a new tab
-            mw.open_txd_workshop_docked(file_path=path)
-        else:
-            # Standalone — open TXD Workshop as a floating window
-            try:
-                from apps.components.Txd_Editor.txd_workshop import TXDWorkshop
-                txd_win = TXDWorkshop(main_window=None)
-                txd_win.setWindowTitle(f"TXD Workshop — {os.path.basename(path)}")
-                txd_win.show()
-                txd_win.resize(1000, 700)
-                txd_win.open_txd_file(path)
-                # Keep a reference so it isn't garbage collected
-                if not hasattr(self, '_standalone_txd_windows'):
-                    self._standalone_txd_windows = []
-                self._standalone_txd_windows.append(txd_win)
-            except Exception as e:
-                QMessageBox.critical(self, "TXD Error", f"Failed to open TXD:\n{e}")
 
     def _open_file(self): #vers 5
         """Open file dialog — supports DFF (model), COL (collision), and
@@ -15900,7 +11683,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _populate_tex_thumbnails(self): #vers 1
         """Fill the thumbnail grid with 64×64 previews of all loaded textures.
         Each thumbnail is a clickable label — click opens a larger popup."""
-        from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
+        from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
         from PyQt6.QtGui import QImage, QPixmap, QColor, QFont
         from PyQt6.QtCore import Qt as _Qt
 
@@ -16004,92 +11787,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # Fill remaining cells with stretch
         grid.setColumnStretch(COL_COUNT, 1)
 
-    def _show_tex_popup(self, tex: dict): #vers 1
-        """Show a texture at up to 128×128 (or native size if smaller) in a
-        floating popup. Click anywhere on the popup to dismiss it."""
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QHBoxLayout
-        from PyQt6.QtGui import QImage, QPixmap, QColor, QFont
-        from PyQt6.QtCore import Qt as _Qt
-
-        name = tex.get('name', 'texture')
-        rgba = tex.get('rgba_data', b'')
-        w    = tex.get('width',  0)
-        h    = tex.get('height', 0)
-        fmt  = tex.get('format', '?')
-        mips = tex.get('mipmaps', 1)
-
-        MAX_DISPLAY = 256   # cap for popup; shows at native if smaller
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Texture — {name}")
-        dlg.setWindowFlags(
-            _Qt.WindowType.Tool |
-            _Qt.WindowType.FramelessWindowHint |
-            _Qt.WindowType.WindowStaysOnTopHint)
-        dlg.setAttribute(
-            _Qt.WidgetAttribute.WA_DeleteOnClose)
-        dlg_lay = QVBoxLayout(dlg)
-        dlg_lay.setContentsMargins(8, 8, 8, 8)
-        dlg_lay.setSpacing(6)
-        dlg.setStyleSheet(
-            "QDialog { background: palette(base); border: 1px solid palette(mid); border-radius: 4px; }"
-            "QLabel  { color: #ccc; }")
-
-        # Build display pixmap
-        pix = QPixmap(128, 128)
-        pix.fill(QColor(40, 40, 55))
-        disp_w, disp_h = w, h
-
-        if rgba and w > 0 and h > 0 and len(rgba) >= w * h * 4:
-            try:
-                qimg = QImage(rgba[:w*h*4], w, h,
-                              w * 4, QImage.Format.Format_RGBA8888)
-                if w > MAX_DISPLAY or h > MAX_DISPLAY:
-                    # Scale down preserving aspect ratio
-                    scaled = qimg.scaled(
-                        MAX_DISPLAY, MAX_DISPLAY,
-                        _Qt.AspectRatioMode.KeepAspectRatio,
-                        _Qt.TransformationMode.SmoothTransformation)
-                    disp_w, disp_h = scaled.width(), scaled.height()
-                    pix = QPixmap.fromImage(scaled)
-                else:
-                    disp_w, disp_h = w, h
-                    pix = QPixmap.fromImage(qimg)
-            except Exception as e:
-                pass
-
-        img_lbl = QLabel()
-        img_lbl.setPixmap(pix)
-        img_lbl.setFixedSize(disp_w or 128, disp_h or 128)
-        img_lbl.setAlignment(_Qt.AlignmentFlag.AlignCenter)
-        dlg_lay.addWidget(img_lbl)
-
-        # Info strip
-        info_row = QHBoxLayout()
-        info_row.setSpacing(12)
-        for text in [name, f"{w}×{h}", fmt, f"{mips} mip"]:
-            lbl = QLabel(text)
-            lbl.setFont(QFont("Arial", 8))
-            info_row.addWidget(lbl)
-        info_row.addStretch()
-        close_lbl = QLabel("click to dismiss")
-        close_lbl.setFont(QFont("Arial", 7))
-        close_lbl.setStyleSheet("color: #666;")
-        info_row.addWidget(close_lbl)
-        dlg_lay.addLayout(info_row)
-
-        # Click anywhere to close
-        dlg.mousePressEvent = lambda ev: dlg.accept()
-        img_lbl.mousePressEvent = lambda ev: dlg.accept()
-
-        dlg.adjustSize()
-        # Position next to the cursor
-        from PyQt6.QtGui import QCursor
-        pos = QCursor.pos()
-        dlg.move(pos.x() + 10, pos.y() + 10)
-        dlg.exec()
-
-
 
     def _show_tex_hover(self, anchor_widget, tex: dict): #vers 1
         """Show a frameless texture preview that follows the mouse into the popup.
@@ -16175,7 +11872,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     # For textured faces a semi-transparent shading overlay is applied.
 
     def _compute_face_shade(self, v0, v1, v2, ambient=0.30,
-                            light=(0.5, 0.5, 0.8)): #vers 2
+                            light=(0.5, 0.5, 0.8)): #vers 3
         # light=(0.5, 0.5, 0.8) = upper-front-right, suits GTA camera angles
         """Return a shade factor [0..1] for a triangle via Lambertian diffuse.
         v0/v1/v2 are (x,y,z) tuples in view space.
@@ -16190,7 +11887,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if ln < 1e-6:
             return ambient
         nx, ny, nz = nx/ln, ny/ln, nz/ln
-        lx, ly, lz = light
+        lx, ly, lz = light[0], light[1], light[2]
         ll = math.sqrt(lx*lx + ly*ly + lz*lz) or 1.0
         dot = max(0.0, nx*lx/ll + ny*ly/ll + nz*lz/ll)
         return min(1.0, ambient + (1.0 - ambient) * dot)
@@ -16491,18 +12188,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception:
             return None
 
-    def _set_texlist_folder(self): #vers 1
-        """Browse for a texlist/ root folder and persist to settings."""
-        from PyQt6.QtWidgets import QFileDialog
-        current = getattr(self, '_texlist_folder', '') or os.path.expanduser('~')
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select texlist/ root folder", current)
-        if folder:
-            self._texlist_folder = folder
-            self._save_texlist_setting()
-            mw = self.main_window
-            if mw and hasattr(mw, 'log_message'):
-                mw.log_message(f"Model Workshop: texlist folder -> {folder}")
 
     def _save_texlist_setting(self): #vers 1
         """Persist the texlist folder path to model_workshop.json (see _model_workshop_config_dir)"""
@@ -16533,18 +12218,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._texlist_folder = ''
 
 
-    def _load_txd_into_workshop(self): #vers 1
+    def _load_txd_into_workshop(self): #vers 2
         """Open a TXD file and load its textures into Model Workshop."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Load TXD",
             os.path.dirname(getattr(self, '_current_dff_path', '')),
-            "TXD Files (*.txd);;All Files (*)")
+            "Texture Files (*.txd *.wtd *.nft *.xtx *.chk);;TXD Files (*.txd);;All Files (*)")
         if not path:
             return
         self._load_txd_file(path)
 
-    def _parse_txd_lightweight(self, data: bytes) -> list: #vers 4
-        """Parse TXD data. Uses txd_parser.py — supports VC/III/SA PC formats."""
+    def _parse_txd_lightweight(self, data: bytes) -> list: #vers 5
+        """Parse TXD data via txd_parser (all platforms, TXD Workshop reader)."""
         try:
             from apps.methods.txd_parser import parse_txd
             return parse_txd(data)
@@ -16552,7 +12237,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             print(f"_parse_txd_lightweight error: {e}")
             return []
 
-    def _load_txd_file(self, path: str): #vers 3
+    def _load_txd_file(self, path: str): #vers 4
         """Parse a TXD file, populate texture panel, and feed textures into viewport."""
         try:
             with open(path, 'rb') as f:
@@ -16562,8 +12247,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 QMessageBox.warning(self, "TXD",
                     f"No textures found in {os.path.basename(path)}")
                 return
+            from apps.methods.txd_splice import tag_loaded_texture
+            for t in textures:
+                t.setdefault('alpha_name', t.get('mask', ''))
+                tag_loaded_texture(t)
             self._mod_textures = textures
             self._current_txd_path = path
+            self._current_txd_bytes = data
             self._populate_texture_list()
             self._tex_panel.setVisible(True)
             from PyQt6.QtCore import QTimer as _QTTex
@@ -16670,7 +12360,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if getattr(self, '_tex_view_mode', 'list') == 'thumb':
             self._populate_tex_thumbnails()
 
-    def _browse_texlist_folder(self): #vers 1
+    def _browse_texlist_folder(self): #vers 2
         """Browse a Texlist folder — shows all TXDs, lets user add individual textures."""
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem
         folder = QFileDialog.getExistingDirectory(
@@ -16743,10 +12433,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 if not txd_path:
                     return
                 try:
-                    from apps.methods.txd_platform_pc import parse_pc_txd
                     with open(txd_path, 'rb') as f:
                         data = f.read()
-                    texs = parse_pc_txd(data)
+                    texs = self._parse_txd_lightweight(data)
                     for tex in (texs or []):
                         child = QTreeWidgetItem([
                             tex.get('name', '?'),
@@ -16796,10 +12485,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 return
             for txd_path, names in by_file.items():
                 try:
-                    from apps.methods.txd_platform_pc import parse_pc_txd
                     with open(txd_path, 'rb') as f:
                         data = f.read()
-                    texs = parse_pc_txd(data) or []
+                    texs = self._parse_txd_lightweight(data) or []
                     existing = {t['name'].lower() for t in self._mod_textures}
                     for tex in texs:
                         if tex['name'].lower() in names and tex['name'].lower() not in existing:
@@ -16927,21 +12615,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         else:
             QMessageBox.warning(self, "TXD", "Could not build TXD from current textures.")
 
-    def _build_txd_from_textures(self): #vers 1
-        """Build a minimal TXD binary from self._mod_textures.
-        Uses the serializer if available, else copies from source TXD."""
-        # Simplest approach: if all textures came from the same TXD file, just return that
-        if getattr(self, '_current_txd_path', None) and len(self._mod_textures) > 0:
-            try:
-                # If textures haven't been modified, re-read the source file
-                with open(self._current_txd_path, 'rb') as f:
-                    return f.read()
-            except Exception:
-                pass
-        # Fall back to serializer
+    def _build_txd_from_textures(self): #vers 3
+        """TXD bytes from self._mod_textures; untouched textures keep their bytes."""
+        from apps.methods.txd_splice import txd_from_textures
         try:
-            from apps.methods.txd_serializer import build_txd
-            return build_txd(self._mod_textures)
+            return txd_from_textures(self._mod_textures, getattr(self, '_current_txd_bytes', None))
         except Exception as e:
             print(f"TXD build error: {e}")
             return None
@@ -16969,22 +12647,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # - IDE / TXD linking
 
-    def _find_col_via_db(self, model_name: str) -> bool: #vers 1
-        """Look up COL for model_name in asset_db and open in COL Workshop."""
-        mw = getattr(self,'main_window',None)
-        db = getattr(mw,'asset_db',None)
-        if db is None:
-            return False
-        row = db.find_col_model(model_name)
-        if not row:
-            return False
-        # Open in COL Workshop via main_window
-        if mw and hasattr(mw,'open_col_workshop_docked'):
-            mw.open_col_workshop_docked(
-                col_name=row['entry_name'],
-                file_path=row['source_path'])
-            return True
-        return False
 
     def _get_ide_db(self): #vers 2
         """Return IDEDatabase — prefers the one built by DAT Browser on load
@@ -17224,7 +12886,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             _QTLBL.singleShot(50, fn)
         return obj
 
-    def _open_txd_smart(self): #vers 2
+    def _open_txd_smart(self): #vers 3
         """Open TXD — tries in order:
         1. IDE-linked TXD name → search current IMG (case-insensitive)
         2. DFF filename stem → search same folder as DFF (case-insensitive)
@@ -17303,11 +12965,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             path, _ = QFileDialog.getOpenFileName(
                 self, "Open TXD",
                 os.path.dirname(dff_path) if dff_path else '',
-                "TXD Files (*.txd);;All Files (*)")
+                "Texture Files (*.txd *.wtd *.nft *.xtx *.chk);;TXD Files (*.txd);;All Files (*)")
             if path:
                 _open(path)
 
-    def _open_linked_txd(self): #vers 1
+    def _open_linked_txd(self): #vers 2
 
         """Open the IDE-linked TXD in TXD Workshop."""
         obj = getattr(self, '_current_ide_obj', None)
@@ -17342,7 +13004,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         path, _ = QFileDialog.getOpenFileName(
             self, f"Open TXD for {obj.txd_name}",
             getattr(self, '_current_dff_path', ''),
-            "TXD Files (*.txd);;All Files (*)")
+            "Texture Files (*.txd *.wtd *.nft *.xtx *.chk);;TXD Files (*.txd);;All Files (*)")
         if path and mw and hasattr(mw, 'open_txd_workshop_docked'):
             mw.open_txd_workshop_docked(file_path=path)
         elif path:
@@ -17685,7 +13347,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     lines_mtl.append("")
 
                 # Faces — grouped by material
-                from itertools import groupby
                 tris_by_mat = {}
                 for tri in geom.triangles:
                     tris_by_mat.setdefault(tri.material_id, []).append(tri)
@@ -18105,7 +13766,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Export only models referenced by an IDE file."""
         from PyQt6.QtWidgets import QMessageBox, QFileDialog
         import os
-        from apps.components.Model_Editor.depends.col_workshop_writer import save_col_file
+        from apps.methods.col_workshop_writer import save_col_file
 
         if not getattr(self, "current_col_file", None):
             QMessageBox.warning(self, "No COL File", "Load a COL file first.")
@@ -18157,11 +13818,53 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception as e:
             QMessageBox.critical(self, "Export via IDE Error", str(e))
 
+    def _import_col_data(self): #vers 3
+        """Import one or more COL models from .col file(s) into the current archive."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not getattr(self, "current_col_file", None):
+            # No file loaded yet — open the files directly
+            self._open_file()
+            return
+
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import COL File(s)", "",
+            "COL Files (*.col);;All Files (*)")
+        if not paths:
+            return
+
+        from apps.methods.col_workshop_loader import COLFile
+        added = 0
+        for path in paths:
+            cf = COLFile()
+            if cf.load_from_file(path):
+                for model in cf.models:
+                    self.current_col_file.models.append(model)
+                    added += 1
+            else:
+                print(f"Import failed: {path}")
+
+        if added:
+            self._populate_collision_list()
+            self._populate_compact_col_list()
+            # Select last added
+            last = len(self.current_col_file.models) - 1
+            active = (self.mod_compact_list
+                      if getattr(self,'_col_view_mode','list')=='detail'
+                      else self.collision_list)
+            if active.rowCount() > last:
+                active.selectRow(last)
+            msg = f"Imported {added} model(s) from {len(paths)} file(s)."
+            self._set_status(msg)
+            if self.main_window and hasattr(self.main_window,'log_message'):
+                self.main_window.log_message(msg)
+        else:
+            QMessageBox.warning(self, "Import", "No models could be imported.")
+
     def _export_col_data(self): #vers 2
         """Extract/export selected COL models (or all) to individual .col files."""
         import os
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        from apps.components.Model_Editor.depends.col_workshop_writer import save_col_file
+        from apps.methods.col_workshop_writer import save_col_file
 
         if not getattr(self, "current_col_file", None):
             QMessageBox.warning(self, "Export", "No dff file loaded.")
@@ -18244,7 +13947,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             dff_path = path
 
         try:
-            from apps.components.Model_Editor.depends.dff_parser import DFFWriter
+            from apps.methods.dff_parser import DFFWriter
             raw = DFFWriter.write(dff_model)
             with open(dff_path, 'wb') as f:
                 f.write(raw)
@@ -18282,24 +13985,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
 
 
-    def _load_settings(self): #vers 1
-        """Load settings from config file"""
-        import json
-
-        settings_file = os.path.join(
-            os.path.dirname(__file__),
-            'col_workshop_settings.json'
-        )
-
-        try:
-            if os.path.exists(settings_file):
-                with open(settings_file, 'r') as f:
-                    settings = json.load(f)
-                    self.save_to_source_location = settings.get('save_to_source_location', True)
-                    self.last_save_directory = settings.get('last_save_directory', None)
-        except Exception as e:
-            print(f"Failed to load settings: {e}")
-
 
     def _save_settings(self): #vers 1
         """Save settings to config file"""
@@ -18326,13 +14011,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Open standalone COL file - supports COL1, COL2, COL3"""
         self._dff_adapters = []   # clear DFF mode
         try:
-            from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
+            from apps.methods.col_workshop_loader import COLFile
 
             # Create and load COL file
             # col_file = COLFile()
             # col_file.load_from_file(file_path)
 
-            #from apps.components.Model_Editor.depends.col_workshop_loader import load_col_with_progress
+            #from apps.methods.col_workshop_loader import load_col_with_progress
             #col_file = load_col_with_progress(file_path, self)
 
             #if not col_file:  # Just check if None
@@ -18619,8 +14304,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 return
 
             # Import analysis functions
-            from apps.components.Model_Editor.depends.col_operations import get_col_detailed_analysis
-            from gui.col_dialogs import show_col_analysis_dialog
+            from apps.methods.col_operations import get_col_detailed_analysis
+            from apps.gui.col_dialogs import show_col_analysis_dialog
 
             # Get detailed analysis
             analysis_data = get_col_detailed_analysis(self.current_file_path)
@@ -18639,47 +14324,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             print(f"Error analyzing file: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to analyze file:\n{str(e)}")
 
-
-    def _populate_left_panel_from_img(self, img): #vers 5
-        """Populate the left panel list from an already-open IMGFile object.
-        Also stores img as self.current_img so _extract_col_from_img can read entries."""
-        lw = getattr(self, 'col_list_widget', None)
-        if lw is None:
-            return
-        try:
-            lw.count()  # raises RuntimeError if C++ object deleted
-        except RuntimeError:
-            return
-        # Store so clicking entries can extract data
-        self.current_img = img
-
-        lw.clear()
-        model_exts = ('.dff', '.col', '.txd')
-        n_dff = n_txd = n_col = 0
-        from PyQt6.QtGui import QColor
-        for entry in getattr(img, 'entries', []):
-            name = getattr(entry, 'name', '')
-            if not name.lower().endswith(model_exts):
-                continue
-            ext = os.path.splitext(name)[1].lower()
-            item = QListWidgetItem(name)
-            item.setData(Qt.ItemDataRole.UserRole, entry)
-            if ext == '.dff':
-                item.setForeground(QColor('#4db6ac')); n_dff += 1
-            elif ext == '.col':
-                item.setForeground(QColor('#ef5350')); n_col += 1
-            elif ext == '.txd':
-                item.setForeground(QColor('#ffa726')); n_txd += 1
-            lw.addItem(item)
-
-        hdr = getattr(self, '_left_panel_header', None)
-        if hdr:
-            hdr.setText(
-                f"DFF ({n_dff})  TXD ({n_txd})  COL ({n_col})")
-        if self.main_window and hasattr(self.main_window, 'log_message'):
-            self.main_window.log_message(
-                f"Model Workshop: {lw.count()} entries in left panel")
-        return
 
 
     def _load_txd_file_from_data(self, data: bytes, name: str): #vers 1
@@ -18717,7 +14361,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if item:
                 item.setHidden(bool(text) and text not in item.text().lower())
 
-    def _on_col_selected(self, item): #vers 2
+    def _on_col_selected(self, item): #vers 3
         """Handle entry selection from left panel — routes by extension."""
         try:
             entry = item.data(Qt.ItemDataRole.UserRole)
@@ -18734,9 +14378,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 with open(tmp_path, 'wb') as _f: _f.write(data)
                 self.open_dff_file(tmp_path)
             elif name.endswith('.col'):
+                import tempfile, os as _os
                 self.current_col_data = data
                 self.current_col_name = entry.name
-                self._load_col_files(data, entry.name)
+                tmp_path = _os.path.join(tempfile.mkdtemp(), entry.name)
+                with open(tmp_path, 'wb') as _f: _f.write(data)
+                self.open_col_file(tmp_path)
             elif name.endswith('.txd'):
                 self._load_txd_file_from_data(data, entry.name)
         except Exception as e:
@@ -18758,318 +14405,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
 
 
-    def _paint_model_onto(self, painter, model, W, H,
-                          yaw, pitch, zoom, pan_x, pan_y,
-                          flip_h, flip_v,
-                          show_spheres, show_boxes, show_mesh,
-                          backface, render_style, bg_color,
-                          gizmo_mode='translate', viewport=None): #vers 4
-        """Paint COL model: grid → geometry → gizmo → HUD.
-        Uses viewport's own projection when available (consistent coords)."""
-        from PyQt6.QtGui import QPen, QBrush, QColor, QFont, QPolygonF
-        from PyQt6.QtCore import QPointF
-        import math
 
-        # - Use viewport's projection if available
-        if viewport is not None:
-            vp = viewport
-        else:
-            vp = getattr(self, 'preview_widget', None)
-
-        if vp is not None:
-            scale, ox, oy = vp._get_scale_origin()
-            def proj3(x,y,z): return vp._proj(x,y,z)  #vers 1
-            def to_screen(x,y,z):  #vers 1
-                px,py = proj3(x,y,z)
-                return px*scale+ox, py*scale+oy
-        else:
-            # Fallback standalone projection
-            yr = math.radians(yaw);   cy, sy = math.cos(yr), math.sin(yr)
-            pr = math.radians(pitch); cp, sp = math.cos(pr), math.sin(pr)
-            def proj3(x,y,z):  #vers 1
-                rx=x*cy-y*sy; ry=x*sy+y*cy
-                return rx, ry*cp-z*sp
-            scale, ox, oy, _ = self._project_model_2d(model, W, H, padding=20,
-                                                        yaw=yaw, pitch=pitch)
-            def to_screen(x,y,z):  #vers 1
-                px,py=proj3(x,y,z); return px*scale+ox, py*scale+oy
-
-        # - Model geometry extent for grid sizing
-        verts = getattr(model, 'vertices', [])
-        if verts:
-            xs=[v.x for v in verts]; ys=[v.y for v in verts]; zs=[v.z for v in verts]
-            extent = max(max(abs(x) for x in xs+ys+zs), 1.0)
-        else:
-            extent = 5.0
-
-        # - Reference grid (XY plane Z=0)
-        raw_step = extent / 4.0
-        mag  = 10 ** math.floor(math.log10(max(raw_step, 0.001)))
-        step = round(raw_step / mag) * mag; step = max(step, 0.01)
-        half = math.ceil(extent / step + 1) * step
-        n    = int(half / step)
-
-        painter.setRenderHint(painter.renderHints().__class__.Antialiasing, False)
-        for i in range(-n, n+1):
-            v2 = i * step
-            col = QColor(75, 80, 105) if i == 0 else QColor(50, 55, 72)
-            painter.setPen(QPen(col, 1))
-            x0,y0 = to_screen(-half, v2, 0); x1,y1 = to_screen(half, v2, 0)
-            painter.drawLine(int(x0),int(y0),int(x1),int(y1))
-            x0,y0 = to_screen(v2, -half, 0); x1,y1 = to_screen(v2, half, 0)
-            painter.drawLine(int(x0),int(y0),int(x1),int(y1))
-        painter.setRenderHint(painter.renderHints().__class__.Antialiasing, True)
-
-        # - Model geometry (uses viewport's to_screen — zoom/pan consistent)
-        from PyQt6.QtGui import QPolygonF as _PF
-        from PyQt6.QtCore import QPointF as _P, QRectF as _R
-
-        def g3(obj):  #vers 1
-            """Get (x,y,z) from vertex, sphere centre, or tuple."""
-            if hasattr(obj,'x'):        return obj.x, obj.y, obj.z
-            if hasattr(obj,'position'): return obj.position.x,obj.position.y,obj.position.z
-            return float(obj[0]),float(obj[1]),float(obj[2])
-
-        # Mesh faces — render style: wireframe / semi / solid / textured
-        if show_mesh:
-            _verts    = getattr(model, 'vertices', [])
-            _faces    = getattr(model, 'faces',    [])
-            _mats     = getattr(model, 'materials', [])   # DFF materials
-            # UV layer from DFFGeometryAdapter._geometry or direct Geometry object
-            _geom_obj  = getattr(model, '_geometry', model)
-            _uv_layers = getattr(_geom_obj, 'uv_layers', [])
-            _uv_layer  = _uv_layers[0] if _uv_layers else []
-            _tex_cache = getattr(vp, '_tex_cache', {}) if vp else {}
-
-            if _verts and _faces:
-                for face in _faces:
-                    idx = getattr(face, 'vertex_indices', None)
-                    if idx is None:
-                        fa = getattr(face, 'a', None)
-                        if fa is not None: idx = (fa, face.b, face.c)
-                    if not idx or len(idx) != 3:
-                        continue
-                    try:
-                        pts = [_P(*to_screen(*g3(_verts[i]))) for i in idx]
-                    except (IndexError, AttributeError):
-                        continue
-
-                    # Determine fill colour / texture
-                    mat_id  = getattr(face, 'material', 0)
-                    mat_id  = mat_id if isinstance(mat_id, int) else 0
-                    mat_obj = _mats[mat_id] if 0 <= mat_id < len(_mats) else None
-
-                    if render_style == 'wireframe':
-                        painter.setPen(QPen(QColor(120, 200, 120, 180), 0.5))
-                        painter.setBrush(Qt.BrushStyle.NoBrush)
-                        painter.drawPolygon(_PF(pts))
-
-                    elif render_style == 'semi':
-                        painter.setPen(QPen(QColor(120, 180, 120, 180), 0.5))
-                        painter.setBrush(QBrush(QColor(60, 120, 60, 80)))
-                        painter.drawPolygon(_PF(pts))
-
-                    elif render_style == 'solid':
-                        col = QColor(170, 175, 180)
-                        if mat_obj and hasattr(mat_obj, 'colour'):
-                            c = mat_obj.colour
-                            col = QColor(c.r, c.g, c.b, 255)
-                        painter.setPen(QPen(QColor(80, 80, 80, 120), 0.3))
-                        painter.setBrush(QBrush(col))
-                        painter.drawPolygon(_PF(pts))
-
-                    elif render_style == 'textured':
-                        tex_img = None
-                        if mat_obj:
-                            tname = (getattr(mat_obj, 'texture_name', '') or '').strip()
-                            if tname and tname.lower() not in ('', 'null', 'none'):
-                                # Try exact name, then stem without extension
-                                tex_img = (_tex_cache.get(tname.lower()) or
-                                           _tex_cache.get(tname.lower().split('.')[0]))
-                        if tex_img and _uv_layer and all(i < len(_uv_layer) for i in idx):
-                            # Affine UV mapping via QTransform per triangle
-                            uvs = [_uv_layer[i] for i in idx]
-                            try:
-                                from PyQt6.QtGui import QTransform
-                                tw, th = tex_img.width(), tex_img.height()
-                                # Source: UV * texture size
-                                sx0,sy0 = uvs[0].u*tw, uvs[0].v*th
-                                sx1,sy1 = uvs[1].u*tw, uvs[1].v*th
-                                sx2,sy2 = uvs[2].u*tw, uvs[2].v*th
-                                # Dest: screen positions
-                                dx0,dy0 = pts[0].x(), pts[0].y()
-                                dx1,dy1 = pts[1].x(), pts[1].y()
-                                dx2,dy2 = pts[2].x(), pts[2].y()
-                                # Solve affine: src → dst
-                                det = (sx1-sx0)*(sy2-sy0)-(sx2-sx0)*(sy1-sy0)
-                                if abs(det) > 0.001:
-                                    a11=(( dx1-dx0)*(sy2-sy0)-(dx2-dx0)*(sy1-sy0))/det
-                                    a12=(( dx2-dx0)*(sx1-sx0)-(dx1-dx0)*(sx2-sx0))/det
-                                    a21=(( dy1-dy0)*(sy2-sy0)-(dy2-dy0)*(sy1-sy0))/det
-                                    a22=(( dy2-dy0)*(sx1-sx0)-(dy1-dy0)*(sx2-sx0))/det
-                                    tx=dx0-a11*sx0-a12*sy0
-                                    ty=dy0-a21*sx0-a22*sy0
-                                    xf = QTransform(a11,a21,a12,a22,tx,ty)
-                                    painter.save()
-                                    painter.setClipRegion(
-                                        __import__('PyQt6.QtGui',fromlist=['QRegion']).QRegion(
-                                            _PF(pts).toPolygon()))
-                                    painter.setTransform(xf, combine=True)
-                                    painter.drawImage(0, 0, tex_img)
-                                    painter.restore()
-                                else:
-                                    raise ValueError("degenerate")
-                            except Exception:
-                                # Fallback: solid colour
-                                col = QColor(170, 120, 80)
-                                painter.setPen(Qt.PenStyle.NoPen)
-                                painter.setBrush(QBrush(col))
-                                painter.drawPolygon(_PF(pts))
-                        else:
-                            # No texture: draw solid grey + wire
-                            col = QColor(170, 175, 180)
-                            if mat_obj and hasattr(mat_obj, 'colour'):
-                                c = mat_obj.colour
-                                col = QColor(c.r, c.g, c.b, 220)
-                            painter.setPen(QPen(QColor(80,80,80,80), 0.3))
-                            painter.setBrush(QBrush(col))
-                            painter.drawPolygon(_PF(pts))
-
-        # Boxes
-        if show_boxes:
-            painter.setPen(QPen(QColor(220,180,50),1.5))
-            painter.setBrush(QBrush(QColor(220,180,50,40)))
-            for box in getattr(model,'boxes',[]):
-                bmin = box.min_point if hasattr(box,'min_point') else box.min
-                bmax = box.max_point if hasattr(box,'max_point') else box.max
-                x1,y1=to_screen(*g3(bmin)); x2,y2=to_screen(*g3(bmax))
-                painter.drawRect(_R(min(x1,x2),min(y1,y2),abs(x2-x1) or 2,abs(y2-y1) or 2))
-
-        # Spheres
-        if show_spheres:
-            painter.setPen(QPen(QColor(80,200,220),1.5))
-            painter.setBrush(QBrush(QColor(80,200,220,40)))
-            for sph in getattr(model,'spheres',[]):
-                cx,cy,cz=g3(sph.center) if hasattr(sph,'center') else (0,0,0)
-                r = sph.radius * scale
-                sx,sy=to_screen(cx,cy,cz)
-                painter.drawEllipse(_R(sx-r,sy-r,r*2 or 2,r*2 or 2))
-
-        # - Gizmo at model centroid
-        if verts:
-            cx3=sum(v.x for v in verts)/len(verts)
-            cy3=sum(v.y for v in verts)/len(verts)
-            cz3=sum(v.z for v in verts)/len(verts)
-        else:
-            cx3=cy3=cz3=0.0
-        gx, gy = to_screen(cx3, cy3, cz3)
-        arm = max(45, min(W,H) * 0.15)
-
-        axes = [((1,0,0),QColor(220,60,60),'X'),
-                ((0,1,0),QColor(60,200,60),'Y'),
-                ((0,0,1),QColor(60,120,220),'Z')]
-        sorted_axes = sorted(axes, key=lambda a: proj3(*a[0])[1], reverse=True)
-
-        if gizmo_mode == 'translate':
-            for (dx,dy,dz), color, label in sorted_axes:
-                px,py = proj3(dx,dy,dz)
-                tx,ty = gx+px*arm, gy+py*arm
-                painter.setPen(QPen(color,2))
-                painter.drawLine(int(gx),int(gy),int(tx),int(ty))
-                ang = math.atan2(ty-gy, tx-gx); aw,ah = 12,6
-                tip  = QPointF(tx,ty)
-                lpt  = QPointF(tx-aw*math.cos(ang)+ah*math.sin(ang), ty-aw*math.sin(ang)-ah*math.cos(ang))
-                rpt  = QPointF(tx-aw*math.cos(ang)-ah*math.sin(ang), ty-aw*math.sin(ang)+ah*math.cos(ang))
-                painter.setBrush(QBrush(color)); painter.setPen(QPen(color,1))
-                painter.drawPolygon(QPolygonF([tip,lpt,rpt]))
-                lx=tx+(9 if tx>=gx else -14); ly=ty+(5 if ty>=gy else -3)
-                painter.setFont(QFont('Arial',8,QFont.Weight.Bold))
-                painter.setPen(color); painter.drawText(int(lx),int(ly),label)
-        else:
-            # Rotate rings
-            N = 64
-            rings = [((1,0,0),(0,1,0),(0,0,1),QColor(220,60,60),'X'),
-                     ((0,1,0),(1,0,0),(0,0,1),QColor(60,200,60),'Y'),
-                     ((0,0,1),(1,0,0),(0,1,0),QColor(60,120,220),'Z')]
-            for (_,t1,t2,color,label) in sorted(rings, key=lambda r: proj3(*r[0])[1], reverse=True):
-                t1x,t1y,t1z=t1; t2x,t2y,t2z=t2
-                pts=[]
-                for i in range(N+1):
-                    a2=2*math.pi*i/N
-                    wx=math.cos(a2)*t1x+math.sin(a2)*t2x
-                    wy=math.cos(a2)*t1y+math.sin(a2)*t2y
-                    wz=math.cos(a2)*t1z+math.sin(a2)*t2z
-                    px2,py2=proj3(wx,wy,wz)
-                    pts.append(QPointF(gx+px2*arm, gy+py2*arm))
-                painter.setPen(QPen(color,2)); painter.setBrush(Qt.BrushStyle.NoBrush)
-                for i in range(len(pts)-1): painter.drawLine(pts[i],pts[i+1])
-                p45x=math.cos(math.pi/4)*t1x+math.sin(math.pi/4)*t2x
-                p45y=math.cos(math.pi/4)*t1y+math.sin(math.pi/4)*t2y
-                p45z=math.cos(math.pi/4)*t1z+math.sin(math.pi/4)*t2z
-                lp,lq=proj3(p45x,p45y,p45z)
-                painter.setFont(QFont('Arial',8,QFont.Weight.Bold)); painter.setPen(color)
-                painter.drawText(int(gx+lp*arm+(6 if lp>=0 else -12)),
-                                 int(gy+lq*arm+(5 if lq>=0 else -3)), label)
-
-        # Gizmo centre dot
-        painter.setBrush(QBrush(self._get_ui_color('border'))); painter.setPen(QPen(self._get_ui_color('viewport_text'),1))
-        painter.drawEllipse(int(gx)-5,int(gy)-5,10,10)
-
-        # - Toggle button (top-right)
-        bx,by,bw,bh = W-70,4,66,22
-        painter.setBrush(QBrush(QColor(40,44,62)))
-        painter.setPen(QPen(QColor(80,90,130),1))
-        painter.drawRoundedRect(bx,by,bw,bh,4,4)
-        painter.setFont(QFont('Arial',8)); painter.setPen(QColor(200,200,220))
-        lbl = '↕ Move [G]' if gizmo_mode=='translate' else '↻ Rotate [R]'
-        painter.drawText(bx+4,by+15,lbl)
-
-        # - HUD
-        painter.setFont(QFont('Arial',8)); painter.setPen(self._get_ui_color('border'))
-        painter.drawText(6,14,getattr(model,'name',''))
-        y2=H-54
-        spheres=getattr(model,'spheres',[]); boxes=getattr(model,'boxes',[])
-        faces=getattr(model,'faces',[])
-        for col_c,txt in [(QColor(100,180,100),f"Mesh  F:{len(faces)} V:{len(verts)}"),
-                          (QColor(220,180,50), f"Boxes  {len(boxes)}"),
-                          (QColor(80,200,220), f"Spheres  {len(spheres)}")]:
-            painter.setPen(col_c); painter.drawText(6,y2,txt); y2+=14
-        painter.setPen(QColor(120,125,140)); painter.setFont(QFont('Arial',7))
-        painter.drawText(6,H-4,f"Y:{yaw:.0f}° P:{pitch:.0f}° Z:{zoom:.2f}x")
-        painter.drawText(W-68,H-4,f"grid {step:.3g}")
-
-
-    def _get_view_coords(self, model, view='xy'): #vers 1
-        """Get all geometry points projected to 2D using the selected view axis."""
-        def vc(v):  #vers 1
-            if hasattr(v, 'position'): return (v.position.x, v.position.y, v.position.z)
-            return (v.x, v.y, v.z)
-        def sc(s):  #vers 1
-            c = s.center
-            if hasattr(c, 'x'): return (c.x, c.y, c.z)
-            return (c[0], c[1], c[2])
-        def bc(b, which):  #vers 1
-            pt = b.min_point if which=='min' else b.max_point if hasattr(b,'min_point') else (b.min if which=='min' else b.max)
-            if hasattr(pt, 'x'): return (pt.x, pt.y, pt.z)
-            return (pt[0], pt[1], pt[2])
-
-        # Map view to (horiz_idx, vert_idx) in 3D coords
-        axes = {'xy': (0,1), 'xz': (0,2), 'yz': (1,2)}
-        hi, vi = axes.get(view, (0,1))
-
-        pts = []
-        for s in getattr(model, 'spheres', []):
-            x,y,z = sc(s); r = s.radius
-            coords = (x,y,z); px,py = coords[hi], coords[vi]
-            pts += [(px-r,py-r),(px+r,py+r)]
-        for b in getattr(model, 'boxes', []):
-            mn = bc(b,'min'); mx = bc(b,'max')
-            pts += [(mn[hi],mn[vi]),(mx[hi],mx[vi])]
-        for v in getattr(model, 'vertices', []):
-            x,y,z = vc(v)
-            coords = (x,y,z)
-            pts.append((coords[hi], coords[vi]))
-        return pts
 
     def _project_model_2d(self, model, width, height, padding=8,
                           yaw=0.0, pitch=0.0,
@@ -19145,7 +14481,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         from PyQt6.QtCore import QRectF, QPointF
         import math
 
-        import math
         scale, ox, oy, _ = self._project_model_2d(
             model, width, height, padding,
             yaw=yaw, pitch=pitch, flip_h=flip_h, flip_v=flip_v)
@@ -19224,7 +14559,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _generate_collision_thumbnail(self, model, width=64, height=64,
                                       yaw=0.0, pitch=0.0): #vers 2
         """Generate a small QPixmap thumbnail of a COL model."""
-        from PyQt6.QtGui import QPixmap, QPainter, QColor, QPen
+        from PyQt6.QtGui import QPixmap, QPainter, QPen
         pixmap = QPixmap(width, height)
         pixmap.fill(self._get_ui_color('viewport_bg'))
         has_data = (getattr(model, 'spheres', []) or
@@ -19303,7 +14638,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception as e:
             print("_on_collision_selected error: " + str(e))
 
-    def _select_model_by_row(self, row): #vers 3
+    def _select_model_by_row(self, row): #vers 4
         """Load model by row index into preview — COL mode only."""
         try:
             if getattr(self, '_dff_adapters', None):
@@ -19327,13 +14662,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
             # Push model into viewport
             pw = getattr(self, 'preview_widget', None)
-            if pw:
-                if VIEWPORT_AVAILABLE and isinstance(pw, COL3DViewport):
-                    pw.set_current_model(model, row)
-                else:
-                    w = max(400, pw.width()); h = max(400, pw.height())
-                    pw.setPixmap(self._render_collision_preview(model, w, h))
-                    pw.setScaledContents(False)
+            if pw and getattr(model, 'geometries', None):   # COL models have none
+                pw.set_current_model(model, row)
 
             # Spin thumbnail in detail list
             self._start_thumbnail_spin(row, model)
@@ -19461,7 +14791,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             uv_layers = getattr(geom, 'uv_layers', [])
             uv_info = menu.addAction(
                 f"UV layers: {len(uv_layers)}  "
-                f"({'has UVs' if uv_layers else 'no UVs — textured mode won\'t work'})")
+                f"({'has UVs' if uv_layers else 'no UVs, textured mode will not work'})")
             uv_info.setEnabled(False)
 
         # - Export
@@ -19509,7 +14839,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 return
 
             # Build a minimal COL file containing just this model
-            from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
+            from apps.methods.col_workshop_loader import COLFile
             out = COLFile()
             out.models = [model]
             if hasattr(out, 'save'):
@@ -19536,7 +14866,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
 
-    def _import_replace_col_model(self, row): #vers 1
+    def _import_replace_col_model(self, row): #vers 2
         """Replace a collision model entry from an external COL file."""
         try:
             file_path, _ = QFileDialog.getOpenFileName(
@@ -19545,7 +14875,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if not file_path:
                 return
 
-            from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
+            from apps.methods.col_workshop_loader import COLFile
             new_col = COLFile()
             if not new_col.load(file_path):
                 QMessageBox.warning(self, "Import Failed",
@@ -19579,8 +14909,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.current_col_file.models[row] = src_model
 
             # Refresh the table row
-            from apps.methods.populate_col_table import populate_col_table
-            populate_col_table(self, self.current_col_file)
+            self._populate_collision_list()
+            self._populate_compact_col_list()
             self.collision_list.selectRow(row)
 
             if hasattr(self, 'save_btn'):
@@ -19785,60 +15115,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             print(f"Error populating collision table: {str(e)}")
 
 
-    def _create_preview_widget(self, level_data=None): #vers 3
-        """Create preview widget - large collision preview like TXD Workshop"""
-        if level_data is None:
-            # Return preview label for collision display
-            preview = QLabel()
-            preview.setMinimumSize(400, 400)
-            preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            preview.setStyleSheet("""
-                QLabel {
-                    background: palette(base);
-                    border: 2px solid palette(mid);
-                    border-radius: 3px;
-                    color: palette(placeholderText);
-                }
-            """)
-            preview.setText("Preview Area\n\nSelect a collision model to preview")
-            return preview
 
 
-    def _toggle_spheres(self, checked): #vers 3
-        """Toggle sphere visibility"""
-        try:
-            if hasattr(self, 'viewer_3d'):
-                self.viewer_3d.set_view_options(show_spheres=checked)
-            print(f"Spheres visibility: {checked}")
-        except Exception as e:
-            print(f"Error toggling spheres: {str(e)}")
 
-
-    def _toggle_boxes(self, checked): #vers 3
-        """Toggle box visibility"""
-        try:
-            if hasattr(self, 'viewer_3d'):
-                self.viewer_3d.set_view_options(show_boxes=checked)
-            print(f"Boxes visibility: {checked}")
-        except Exception as e:
-            print(f"Error toggling boxes: {str(e)}")
-
-
-    def _toggle_mesh(self, checked): #vers 3
-        """Toggle mesh visibility"""
-        try:
-            if hasattr(self, 'viewer_3d'):
-                self.viewer_3d.set_view_options(show_mesh=checked)
-            print(f"Mesh visibility: {checked}")
-        except Exception as e:
-            print(f"Error toggling mesh: {str(e)}")
 
 # ----- Render functions
 
     def _setup_hotkeys(self): #vers 3
         """Setup Plasma6-style keyboard shortcuts for this application - checks for existing methods"""
         from PyQt6.QtGui import QShortcut, QKeySequence
-        from PyQt6.QtCore import Qt
 
         # === FILE OPERATIONS ===
 
@@ -19851,10 +15136,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Save col (Ctrl+S)
         self.hotkey_save = QShortcut(QKeySequence.StandardKey.Save, self)
-        if hasattr(self, '_save_col_file'):
-            self.hotkey_save.activated.connect(self._save_col_file)
-        elif hasattr(self, 'save_col_file'):
-            self.hotkey_save.activated.connect(self.save_col_file)
+        self.hotkey_save.activated.connect(self._save_map_or_model)
 
         # Force Save col (Alt+Shift+S)
         self.hotkey_force_save = QShortcut(QKeySequence("Alt+Shift+S"), self)
@@ -19889,7 +15171,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # === EDIT OPERATIONS ===
 
         # Undo (Ctrl+Z)
-        # Real fix (Aug 20 2026, per Keith: "Undo/redo for mapping
+        #  fix (Aug 20 2026,  "Undo/redo for mapping
         # changes") - was only ever wired to the older, separate
         # paint/material undo system (_undo_last_action, from the
         # collision-paint context) - the newer, general map-edit undo
@@ -19924,14 +15206,24 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         # Delete (Delete)
         self.hotkey_delete = QShortcut(QKeySequence.StandardKey.Delete, self)
-        if hasattr(self, '_delete_collision'):
-            self.hotkey_delete.activated.connect(self._delete_surface)
+        self.hotkey_delete.activated.connect(self._delete_selected_instances)
+        # Drop selected objects to the ground (End)
+        self.hotkey_drop_ground = QShortcut(QKeySequence("End"), self)
+        self.hotkey_drop_ground.activated.connect(self._drop_selected_to_ground)
 
 
         # Duplicate (Ctrl+D)
         self.hotkey_duplicate = QShortcut(QKeySequence("Ctrl+D"), self)
-        if hasattr(self, '_duplicate_collision'):
-            self.hotkey_duplicate.activated.connect(self._duplicate_surface)
+        self.hotkey_duplicate.activated.connect(self._duplicate_selected)
+
+        # Camera bookmarks: Ctrl+1..9 go, Ctrl+Shift+1..9 save
+        self._camera_bookmark_keys = []
+        for slot in range(1, 10):
+            go = QShortcut(QKeySequence(f"Ctrl+{slot}"), self)
+            go.activated.connect(lambda s=slot: self._goto_camera_bookmark(s))
+            sv = QShortcut(QKeySequence(f"Ctrl+Shift+{slot}"), self)
+            sv.activated.connect(lambda s=slot: self._save_camera_bookmark(s))
+            self._camera_bookmark_keys += [go, sv]
 
 
         # Rename (F2)
@@ -20113,8 +15405,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _show_settings_hotkeys(self): #vers 1
         """Show settings dialog with hotkey customization"""
         from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
-                                    QWidget, QLabel, QLineEdit, QPushButton,
-                                    QGroupBox, QFormLayout, QKeySequenceEdit)
+                                    QWidget, QLabel, QPushButton, QGroupBox,
+                                    QFormLayout, QKeySequenceEdit)
         from PyQt6.QtCore import Qt
 
         dialog = QDialog(self)
@@ -20291,7 +15583,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             <b>✓ IDE Integration:</b> Link to DAT Browser IDE entries<br>
             <b>✓ TXD:</b> Auto-load matching TXD for textured preview<br><br>
             <b>Shortcuts:</b><br>
-            Ctrl+O: Open  |  Ctrl+S: Save  |  Ctrl+D: Open DFF<br>
+            Ctrl+O: Open  |  Ctrl+S: Save  |  Ctrl+D: Duplicate object  |  End: Drop to ground  |  Ctrl+1..9 / Ctrl+Shift+1..9: Camera bookmarks<br>
+            W / E: Move / Rotate gizmo  |  Tab / Shift+Tab: X, Y, XY, Z constraint  |  drag selected object to move<br>
             Ctrl+T: Open TXD  |  Ctrl+Z: Undo  |  Delete: Remove
         """)
         lay.addWidget(info, 1)
@@ -20362,7 +15655,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         filter (All/Most Used/Favourites/Generic) over the loaded
         object catalog. Double-click a row to toggle its favourite
         status (persisted to map_settings)."""
-        from PyQt6.QtWidgets import QTableView, QLineEdit, QPushButton, QButtonGroup, QToolButton, QStackedWidget
+        from PyQt6.QtWidgets import QTableView, QLineEdit, QPushButton, QButtonGroup, QToolButton
         from apps.methods.imgfactory_svg_icons import get_add_icon, get_trash_icon, get_rename_icon
 
         OBJECT_BROWSER_ICON_SIZE = 18
@@ -20506,6 +15799,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         view.verticalHeader().setVisible(False)
         view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        view.setDragEnabled(True)                 # drag a model into the viewport to place it
+        view.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         view.doubleClicked.connect(self._on_object_row_double_clicked)
         view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         view.customContextMenuRequested.connect(self._on_object_browser_context_menu)
@@ -20749,7 +16044,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         format doesn't) - that needs real file-writing infrastructure,
         tracked separately.
 
-        Undoable now (Aug 20 2026, per Keith: "Undo/redo for mapping
+        Undoable now (Aug 20 2026,  "Undo/redo for mapping
         changes") - was explicitly called out in TODO.md as an in-
         memory-only Object Browser action that isn't undoable yet."""
         loader = getattr(self, '_world_loader', None)
@@ -20807,26 +16102,24 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._current_instance_index = idx
         self._center_on_instance(instances[idx], nav_info=(idx, len(instances)))
 
-    def _add_instance_of_model(self, model_id): #vers 2
-        """Add a new placement of an existing model - IN MEMORY ONLY
-        for now, at a default position (origin, identity rotation).
-        Does NOT yet write the new inst line back to the actual IPL
-        file - that needs real file-writing infrastructure, tracked
-        separately.
+    def _add_instance_of_model(self, model_id): #vers 3
+        """Add a new placement of an existing model at the view centre,
+        on the ground, in the target IPL (selected IPL row, or asked).
+        Saved with Ctrl+S like any other edit.
 
-        Undoable now (Aug 20 2026, per Keith: "Undo/redo for mapping
+        Undoable now (Aug 20 2026,  "Undo/redo for mapping
         changes") - was explicitly called out in TODO.md as an in-
         memory-only Object Browser action that isn't undoable yet."""
         loader = getattr(self, '_world_loader', None)
         obj = loader.get_object(model_id) if loader else None
         if obj is None:
             return
-        from apps.methods.gta_dat_parser import IPLInstance
-        new_inst = IPLInstance(
-            model_id=model_id, model_name=obj.model_name, interior=0,
-            pos_x=0.0, pos_y=0.0, pos_z=0.0,
-            rot_x=0.0, rot_y=0.0, rot_z=0.0, rot_w=1.0,
-            lod_index=-1, source_ipl="(added this session)", line_no=0)
+        vp = getattr(self, 'preview_widget', None)
+        cx, cy = (-vp._pan_x, -vp._pan_y) if vp is not None else (0.0, 0.0)
+        gz = vp.ground_z_below(cx, cy, 5000.0) if vp is not None and hasattr(vp, 'ground_z_below') else None
+        new_inst = self._new_instance(model_id, (cx, cy, gz if gz is not None else 0.0))
+        if new_inst is None:
+            return
 
         def _do_add():
             self._all_instances = getattr(self, '_all_instances', [])
@@ -20850,13 +16143,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         _do_add()
         self._push_map_undo(_do_remove, _do_add, f"Add instance of '{obj.model_name}'")
         self._center_on_instance(new_inst)
-        self._set_status(f"Added a new instance of '{obj.model_name}' at the origin "
-                         f"(in memory only - not yet written to disk)")
+        self._set_status(f"Added '{obj.model_name}' to {new_inst.source_ipl} at the view centre "
+                         f"- Ctrl+S to save")
 
     def _delete_all_instances_of_model(self, model_id): #vers 2
         """Remove every placement of a model.
 
-        Undoable now (Aug 20 2026, per Keith: "Undo/redo for mapping
+        Undoable now (Aug 20 2026,  "Undo/redo for mapping
         changes") - was explicitly called out in TODO.md as an in-
         memory-only Object Browser action that isn't undoable yet."""
         loader = getattr(self, '_world_loader', None)
@@ -20902,123 +16195,377 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(f"Removed {removed} placement(s) "
                          f"(in memory only - not yet written to disk)")
 
-    def _create_instance_list_dock(self): #vers 3
-        """Instance List dock - a browsable table (ID + Model only) of
-        every loaded world placement. Single-click (or keyboard
-        navigation) shows/updates the non-modal object edit panel for
-        that instance; double-click additionally centres the camera in
-        all three World View panes on it."""
-        from PyQt6.QtWidgets import QTableView
 
-        view = QTableView()
-        view.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents)
-        view.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch)
-        view.verticalHeader().setVisible(False)
-        view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
-        view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        view.customContextMenuRequested.connect(self._on_instance_list_context_menu)
-        view.doubleClicked.connect(self._on_instance_row_double_clicked)
-        self._instance_table = view
 
-        dock = QDockWidget("Instance List", self)
-        dock.setObjectName("Instance List")
-        dock.setWidget(view)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                        QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        self._instance_list_dock = dock
-        return dock
-
-    def _on_instance_row_double_clicked(self, index): #vers 3
-        """Double-click does the same as single-click (centre camera +
-        gizmo + edit panel) - kept as a separate handler since it's
-        also the natural place to land double-click-on-the-rendered-
-        marker-in-the-viewport picking, once that's built."""
-        model = self._instance_table.model()
-        inst = model.instance_at(index.row()) if model else None
-        if inst is None:
-            return
-        self._center_on_instance(inst)
-
-    def _on_viewport_instance_picked(self, inst, pane): #vers 2
-        """Called when the user clicks directly on a rendered marker in
-        one specific World View pane - zooms in close on that instance
-        WITHIN THAT PANE ONLY, and shows the edit panel."""
-        pane._pan_x = -inst.pos_x
-        pane._pan_y = -inst.pos_y
-        pane._dist = 15.0   # close-up distance - a reasonable default,
-                            # not tuned against real object sizes
-        if pane._projection == 'ortho':
-            try:
-                pane.resizeGL(pane.width(), pane.height())   # refresh ortho half_h for the new dist
-            except Exception:
-                pass
-        pane.set_gizmo_position((inst.pos_x, inst.pos_y, inst.pos_z))
-        pane.update()
-        self._show_instance_edit_panel(inst)
-
-    def _center_on_instance(self, inst, nav_info=None): #vers 2
+    def _center_on_instance(self, inst, nav_info=None): #vers 4
         """Centre all three World View panes' cameras on an instance,
         show an XYZ gizmo at its position, and show/update its edit
         panel - the shared behaviour for both single- and double-
         clicking an Instance List row, and (since the Object Browser
         merge) selecting a model row with one or more placements.
         nav_info, if given, is (current_index, total_count) for
-        Prev/Next cycling through a model's other placements."""
+        Prev/Next cycling through a model's other placements.
+
+        focus_from_above (Sep 5 2026,  "can we change the
+        camera view, have a setting, view from 0, +200 so we dont
+        view the model from the bottom, we see it from the top
+        instead") - when on, also resets yaw/pitch/dist to a fixed
+        from-above angle rather than leaving whatever angle the
+        camera already happened to be at, which could be looking up
+        from underneath the model."""
+        from_above = self.map_settings.get('focus_from_above', False)
+        focus_dist = self.map_settings.get('focus_from_above_dist', 200.0)
         for pane in getattr(self, '_world_panes', []):
             pane._pan_x = -inst.pos_x
             pane._pan_y = -inst.pos_y
-            pane.set_gizmo_position((inst.pos_x, inst.pos_y, inst.pos_z))
+            if from_above:
+                pane._yaw = 0.0
+                pane._pitch = 89.0
+                pane._dist = focus_dist
+            pane.set_gizmo_target(inst)
+        vp = getattr(self, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'set_gizmo_target'):
+            vp.set_gizmo_target(inst)
         self._show_instance_edit_panel(inst, nav_info)
 
-    def _show_instance_edit_panel(self, inst, nav_info=None): #vers 3
-        """Show (creating on first use) the non-modal object edit panel
-        for one instance - stays open and gets its content refreshed
-        for whichever instance is currently selected, rather than a
-        modal dialog that blocks interaction and needs reopening each
-        time.
+    def _show_instance_edit_panel(self, inst, nav_info=None): #vers 5
+        """Show the non-modal IPL Object Editor window for one instance.
+        Plain top-level window: floating QDockWidget came up black on Wayland."""
+        win = getattr(self, '_instance_edit_panel', None)
+        if win is None:
+            win = _InstanceEditPanel(self, self)
+            win.setWindowFlags(Qt.WindowType.Window)
+            win.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            win.setAutoFillBackground(True)
+            self._instance_edit_panel = win
+            self._apply_ipl_editor_on_top_setting()
+            win.resize(620, 400)
+            top_level = self.window()
+            win.move(top_level.mapToGlobal(top_level.rect().topLeft()) + QPoint(8, 8))
+        win.show_for_instance(inst, getattr(self, '_world_loader', None), nav_info,
+                              getattr(self, '_model_cache', None))
+        win.show()
+        win.raise_()
+        win.activateWindow()
 
-        Wrapped in a real QDockWidget (Aug 1 2026)"""
-        dock = getattr(self, '_instance_edit_dock', None)
-        if dock is None:
-            panel = _InstanceEditPanel(self)
-            self._instance_edit_panel = panel
-            dock = QDockWidget("IPL Object Editor", self)
-            dock.setObjectName("IPL Object Editor")
-            dock.setWidget(panel)
-            dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                            QDockWidget.DockWidgetFeature.DockWidgetClosable)
-            outer_mw = getattr(self, '_outer_mw', None)
-            if outer_mw is not None:
-                outer_mw.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
-            dock.setFloating(True)
-            dock.setWindowFlags(
-                (dock.windowFlags() & ~Qt.WindowType.WindowType_Mask) | Qt.WindowType.Window)
-            dock.show()
-            dock.resize(620, 400)
+    def _apply_ipl_editor_on_top_setting(self): #vers 2
+        """Apply ipl_editor_always_on_top to the IPL Object Editor window."""
+        win = getattr(self, '_instance_edit_panel', None)
+        if win is None:
+            return
+        on_top = self.map_settings.get('ipl_editor_always_on_top', False)
+        flags = win.windowFlags()
+        if bool(flags & Qt.WindowType.WindowStaysOnTopHint) == on_top:
+            return
+        was_visible = win.isVisible()
+        win.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
+        if was_visible:
+            win.show()
 
-            if dock.isFloating():
-                top_level = self.window()
-                dock.move(top_level.mapToGlobal(top_level.rect().topLeft()) +
-                         QPoint(8, 8))
-            self._instance_edit_dock = dock
-        panel = self._instance_edit_panel
-        panel.show_for_instance(inst, getattr(self, '_world_loader', None), nav_info,
-                                getattr(self, '_model_cache', None))
-        dock.show()
-        dock.raise_()
+    def _apply_vc_layout_ipl_stems(self, loader): #vers 1
+        """Populate loader.vc_layout_ipl_stems from the vc_layout_ipl_
+        stems setting (Sep 5 2026,  "LC, MLL, VC are still
+        in VC format... a loading toggle to adjust ipl loading
+        patterns") - a comma-separated list of IPL filename stems
+        (no extension, case-insensitive) to parse using VC's own
+        field layout instead of the world's own default game. Empty
+        setting means no change to normal loading behaviour."""
+        raw = self.map_settings.get('vc_layout_ipl_stems', '') or ''
+        stems = {s.strip().lower() for s in raw.split(',') if s.strip()}
+        loader.vc_layout_ipl_stems = stems
 
-    def _on_instance_edited(self, inst): #vers 3
+    # -- object operations: select, duplicate, delete, rotate, ground, align, place (Sep 23 2026)
+    def _selected_instances(self): #vers 1
+        """Viewport multi-selection, else the Object Editor's instance."""
+        vp = getattr(self, 'preview_widget', None)
+        sel = vp.selected_instances() if vp is not None and hasattr(vp, 'selected_instances') else []
+        if sel:
+            return sel
+        panel = getattr(self, '_instance_edit_panel', None)
+        inst = getattr(panel, '_inst', None) if panel is not None else None
+        return [inst] if inst is not None else []
+
+    def _on_viewport_selection(self, insts, primary): #vers 1
+        """Viewport selection changed: Object Editor follows the primary object."""
+        if primary is not None:
+            self._show_instance_edit_panel(primary)
+        self._set_status(f"{len(insts)} object(s) selected" if insts else "Selection cleared")
+
+    def _select_instances(self, insts): #vers 1
+        vp = getattr(self, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'set_selection'):
+            vp.set_selection(insts, insts[-1] if insts else None, notify=False)
+        if insts:
+            self._show_instance_edit_panel(insts[-1])
+
+    def _lod_parent_ipl(self, ipl_name): #vers 1
+        """IPL whose instance list a lod_index points into (SA streams -> parent text IPL)."""
+        for parent, streams in getattr(self, '_ipl_names_with_binary_stream', {}).items():
+            if any(en == ipl_name for _a, en in streams):
+                return parent
+        return ipl_name
+
+    def _refresh_after_instance_change(self): #vers 1
+        """Rebuild lists, counts and the viewport after instances were added/removed."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            return
+        self._all_instances = list(loader.instances)
+        self._object_instance_counts = None
+        self._populate_object_browser(loader)
+        self._populate_instance_list(loader)
+        self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=False)
+
+    def _add_instances(self, insts, label): #vers 1
+        """Append new instances (end of their IPL keeps SA LOD indices valid); undoable."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None or not insts:
+            return
+
+        def _add():
+            loader.instances.extend(insts)
+            self._refresh_after_instance_change()
+            self._select_instances(list(insts))
+
+        def _remove():
+            ids = {id(i) for i in insts}
+            loader.instances[:] = [i for i in loader.instances if id(i) not in ids]
+            self._refresh_after_instance_change()
+            self._select_instances([])
+
+        _add()
+        self._push_map_undo(_remove, _add, label)
+        self._set_status(label)
+
+    def _delete_instances(self, insts): #vers 1
+        """Remove instances, re-pointing SA lod_index links that shift; undoable."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None or not insts:
+            return
+        dead = {id(i) for i in insts}
+        affected = {self._lod_parent_ipl(i.source_ipl) for i in insts}
+        remap = {}                                   # parent ipl -> {old idx: new idx}
+        for p in affected:
+            old = [i for i in loader.instances if i.source_ipl == p]
+            m, n = {}, 0
+            for k, i in enumerate(old):
+                if id(i) in dead:
+                    m[k] = -1
+                else:
+                    m[k] = n
+                    n += 1
+            remap[p] = m
+        lod_changes = []
+        for i in loader.instances:
+            if id(i) in dead or i.lod_index < 0:
+                continue
+            p = self._lod_parent_ipl(i.source_ipl)
+            if p in remap:
+                new = remap[p].get(i.lod_index, -1)
+                if new != i.lod_index:
+                    lod_changes.append((i, i.lod_index, new))
+        positions = [(k, i) for k, i in enumerate(loader.instances) if id(i) in dead]
+
+        def _do():
+            loader.instances[:] = [i for i in loader.instances if id(i) not in dead]
+            for i, _o, n in lod_changes:
+                i.lod_index = n
+            self._refresh_after_instance_change()
+            self._select_instances([])
+
+        def _undo():
+            for k, i in positions:
+                loader.instances.insert(k, i)
+            for i, o, _n in lod_changes:
+                i.lod_index = o
+            self._refresh_after_instance_change()
+            self._select_instances([i for _k, i in positions])
+
+        _do()
+        self._push_map_undo(_undo, _do, f"Delete {len(insts)} object(s)")
+        msg = f"Deleted {len(insts)} object(s)"
+        if lod_changes:
+            msg += f"; {len(lod_changes)} LOD link(s) re-pointed"
+        self._set_status(msg)
+
+    def _delete_selected_instances(self): #vers 1
+        insts = self._selected_instances()
+        if insts and QMessageBox.question(self, "Delete", f"Delete {len(insts)} object(s)?") \
+                == QMessageBox.StandardButton.Yes:
+            self._delete_instances(insts)
+
+    def _duplicate_selected(self): #vers 1
+        """Ctrl+D: clone the selected objects in place; the clones become the selection."""
+        import dataclasses
+        src = self._selected_instances()
+        if not src:
+            self._set_status("Duplicate: select an object first")
+            return
+        clones = [dataclasses.replace(i, line_no=0, raw_line="") for i in src]
+        self._add_instances(clones, f"Duplicated {len(clones)} object(s)")
+
+    def _on_gizmo_moved(self, insts, dx, dy, dz): #vers 2
+        """Gizmo move finished: apply to every dragged instance, undoable."""
+        olds = [(i, (i.pos_x, i.pos_y, i.pos_z)) for i in insts]
+
+        def _apply(sign):
+            for i, (x, y, z) in olds:
+                i.pos_x, i.pos_y, i.pos_z = x + dx * sign, y + dy * sign, z + dz * sign
+                self._on_instance_edited(i)
+            panel = getattr(self, '_instance_edit_panel', None)
+            if panel is not None and getattr(panel, '_inst', None) is not None:
+                panel._refresh_position_spins()
+
+        _apply(1)
+        self._push_map_undo(lambda: _apply(0), lambda: _apply(1),
+                            f"Move {len(insts)} object(s) ({dx:+.2f}, {dy:+.2f}, {dz:+.2f})")
+        self._set_status(f"Moved {len(insts)} object(s) by ({dx:.2f}, {dy:.2f}, {dz:.2f})")
+
+    def _on_gizmo_rotated(self, insts, axis, angle, pivot): #vers 1
+        """Gizmo rotate finished: rotate orientations and positions about the pivot, undoable."""
+        vp = self.preview_widget
+        q = vp._quat_axis(axis, angle)
+        olds = [(i, (i.pos_x, i.pos_y, i.pos_z), (i.rot_x, i.rot_y, i.rot_z, i.rot_w)) for i in insts]
+        news = []
+        for i, pos, rot in olds:
+            eff = self._conjugate_rotation_for_game(*rot)
+            ne = vp._quat_mul(q, eff)
+            off = vp._quat_rotate(q, (pos[0] - pivot[0], pos[1] - pivot[1], pos[2] - pivot[2]))
+            news.append((i, (pivot[0] + off[0], pivot[1] + off[1], pivot[2] + off[2]),
+                         self._conjugate_rotation_for_game(*ne)))
+
+        def _apply(state):
+            for i, pos, rot in state:
+                i.pos_x, i.pos_y, i.pos_z = pos
+                i.rot_x, i.rot_y, i.rot_z, i.rot_w = rot
+                self._on_instance_edited(i)
+            panel = getattr(self, '_instance_edit_panel', None)
+            if panel is not None and getattr(panel, '_inst', None) is not None:
+                panel._refresh_position_spins()
+                panel._refresh_rotation_spins()
+
+        _apply(news)
+        self._push_map_undo(lambda: _apply(olds), lambda: _apply(news),
+                            f"Rotate {len(insts)} object(s) {angle:+.1f} deg about {axis.upper()}")
+        self._set_status(f"Rotated {len(insts)} object(s) {angle:+.1f} deg about {axis.upper()}")
+
+    def _drop_selected_to_ground(self): #vers 1
+        """End key: set each selected object's Z onto the surface below it."""
+        vp = getattr(self, 'preview_widget', None)
+        insts = self._selected_instances()
+        if vp is None or not insts:
+            self._set_status("Drop to ground: select an object first")
+            return
+        moves, missed = [], 0
+        for i in insts:
+            z = vp.ground_z_below(i.pos_x, i.pos_y, i.pos_z + 0.05, exclude=insts)
+            if z is None:
+                missed += 1
+            elif abs(z - i.pos_z) > 1e-4:
+                moves.append((i, i.pos_z, z))
+        if moves:
+            def _apply(k):
+                for i, old, new in moves:
+                    i.pos_z = (old, new)[k]
+                    self._on_instance_edited(i)
+            _apply(1)
+            self._push_map_undo(lambda: _apply(0), lambda: _apply(1), f"Drop {len(moves)} object(s) to ground")
+        self._set_status(f"Dropped {len(moves)} object(s) to ground"
+                         + (f"; {missed} had nothing below" if missed else ""))
+
+    def _align_selected(self, axis): #vers 1
+        """Line selected objects up with the primary (last selected) on one axis."""
+        insts = self._selected_instances()
+        if len(insts) < 2:
+            self._set_status("Align: select two or more objects")
+            return
+        attr = 'pos_' + axis
+        target = getattr(insts[-1], attr)
+        olds = [(i, getattr(i, attr)) for i in insts]
+
+        def _apply(k):
+            for i, old in olds:
+                setattr(i, attr, (old, target)[k])
+                self._on_instance_edited(i)
+        _apply(1)
+        self._push_map_undo(lambda: _apply(0), lambda: _apply(1), f"Align {len(insts)} on {axis.upper()}")
+        self._set_status(f"Aligned {len(insts)} object(s) on {axis.upper()}")
+
+    def _distribute_selected(self): #vers 1
+        """Space selected objects evenly on the line between the two furthest apart."""
+        insts = self._selected_instances()
+        if len(insts) < 3:
+            self._set_status("Distribute: select three or more objects")
+            return
+        pts = [(i.pos_x, i.pos_y, i.pos_z) for i in insts]
+        a, b = max(((p, q) for p in pts for q in pts),
+                   key=lambda pq: sum((pq[0][k] - pq[1][k]) ** 2 for k in range(3)))
+        d = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        l2 = sum(c * c for c in d) or 1.0
+        order = sorted(insts, key=lambda i: ((i.pos_x - a[0]) * d[0] + (i.pos_y - a[1]) * d[1]
+                                             + (i.pos_z - a[2]) * d[2]) / l2)
+        n = len(order) - 1
+        olds = [(i, (i.pos_x, i.pos_y, i.pos_z)) for i in order]
+        news = [(i, (a[0] + d[0] * k / n, a[1] + d[1] * k / n, a[2] + d[2] * k / n))
+                for k, i in enumerate(order)]
+
+        def _apply(state):
+            for i, p in state:
+                i.pos_x, i.pos_y, i.pos_z = p
+                self._on_instance_edited(i)
+        _apply(news)
+        self._push_map_undo(lambda: _apply(olds), lambda: _apply(news), f"Distribute {len(insts)} objects")
+        self._set_status(f"Distributed {len(insts)} object(s) evenly")
+
+    def _target_ipl_for_new(self): #vers 1
+        """IPL for new objects: selected IPL row, else primary object's IPL, else ask."""
+        table = getattr(self, '_ipl_sections_table', None)
+        if table is not None and table.currentRow() >= 0:
+            it = table.item(table.currentRow(), 0)
+            name = it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+            if name and name in getattr(self, '_ipl_baseline', {}):
+                return name
+        sel = self._selected_instances()
+        if sel:
+            return sel[-1].source_ipl
+        names = sorted(getattr(self, '_ipl_baseline', {}))
+        if not names:
+            return None
+        pick, ok = QInputDialog.getItem(self, "Place Object", "Add to IPL:", names, 0, False)
+        return pick if ok else None
+
+    def _new_instance(self, model_id, pos): #vers 1
+        """IPLInstance for model_id at pos in the target IPL, or None."""
+        loader = getattr(self, '_world_loader', None)
+        obj = loader.get_object(model_id) if loader else None
+        ipl = self._target_ipl_for_new() if obj is not None else None
+        if ipl is None:
+            return None
+        from apps.methods.gta_dat_parser import IPLInstance
+        return IPLInstance(model_id=model_id, model_name=obj.model_name, interior=0,
+                           pos_x=pos[0], pos_y=pos[1], pos_z=pos[2],
+                           rot_x=0.0, rot_y=0.0, rot_z=0.0, rot_w=1.0,
+                           lod_index=-1, source_ipl=ipl, line_no=0)
+
+    def _on_model_dropped(self, model_id, pos): #vers 1
+        """Object Browser model dropped on the viewport: place it there."""
+        inst = self._new_instance(model_id, pos)
+        if inst is not None:
+            self._add_instances([inst], f"Placed {inst.model_name} in {inst.source_ipl}")
+
+    @staticmethod
+    def _render_scale(inst): #vers 1
+        """Scale to draw with; (0,0,0) means no scale (converted VC/SOL IPLs)."""
+        s = (inst.scale_x, inst.scale_y, inst.scale_z)
+        return (1.0, 1.0, 1.0) if s == (0.0, 0.0, 0.0) else s
+
+    def _on_instance_edited(self, inst): #vers 4
         """Called by _InstanceEditPanel."""
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(vp, 'update_instance_transform'):
             pos = (inst.pos_x, inst.pos_y, inst.pos_z)
             rot = self._effective_rotation(inst)
-            scale = (inst.scale_x, inst.scale_y, inst.scale_z)
+            scale = self._render_scale(inst)
             if vp.update_instance_transform(inst, pos, rot, scale):
 
                 loader = getattr(self, '_world_loader', None)
@@ -21029,7 +16576,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=False)
 
     def _on_ctrl_z_pressed(self): #vers 1
-        """Ctrl+Z's own real handler (Aug 20 2026, per Keith: "Undo/
+        """Ctrl+Z's own real handler (Aug 20 2026,  "Undo/
         redo for mapping changes") - tries the general map-edit undo
         stack first (the more relevant context for the main Map
         Workshop view), falling back to the older, separate paint/
@@ -21045,7 +16592,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status("Nothing to undo")
 
     def _on_undo_ribbon_clicked(self): #vers 1
-        """Undo ribbon button (Aug 21 2026, per Keith: "we need an
+        """Undo ribbon button (Aug 21 2026,  "we need an
         undo button /ribbon icon") - the real, map-undo-aware handler
         (_InstanceEditPanel's own _on_undo_clicked, wired to Ctrl+Z/
         Ctrl+Y earlier this session) was previously only reachable
@@ -21062,7 +16609,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         else:
             self._on_ctrl_z_pressed()
 
-    def _push_map_undo(self, undo_fn, redo_fn, description=""): #vers 1
+    def _push_map_undo(self, undo_fn, redo_fn, description=""): #vers 2
         """Record one undoable map edit (Aug 18 2026)."""
         self.map_undo_stack = getattr(self, 'map_undo_stack', [])
         self.map_redo_stack = getattr(self, 'map_redo_stack', [])
@@ -21071,8 +16618,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if len(self.map_undo_stack) > 100:
             self.map_undo_stack.pop(0)
         self.map_redo_stack.clear()
+        QTimer.singleShot(0, self._refresh_dirty_ipls)
 
-    def _map_undo(self): #vers 1
+    def _map_undo(self): #vers 2
         """Reverse the most recent map edit."""
         stack = getattr(self, 'map_undo_stack', [])
         if not stack:
@@ -21086,6 +16634,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         redo_stack = self.map_redo_stack = getattr(self, 'map_redo_stack', [])
         redo_stack.append(entry)
+        QTimer.singleShot(0, self._refresh_dirty_ipls)
         desc = entry.get('description', '')
         self._set_status(f"Undo: {desc}" if desc else "Undo applied")
 
@@ -21106,41 +16655,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         desc = entry.get('description', '')
         self._set_status(f"Redo: {desc}" if desc else "Redo applied")
 
-    def _on_instance_list_context_menu(self, pos): #vers 2
-        """Right-click a row - Add/Remove Favourites."""
-        view = self._instance_table
-        index = view.indexAt(pos)
-        if not index.isValid():
-            return
-        model = view.model()
-        inst = model.instance_at(index.row())
-        if inst is None:
-            return
-
-        menu = QMenu(view)
-        favourites = self.map_settings.get('favourite_objects') or []
-        is_fav = inst.model_id in favourites
-        fav_act = menu.addAction("Remove from Favourites" if is_fav else "Add to Favourites")
-        fav_act.triggered.connect(
-            lambda checked=False, mid=inst.model_id: self._toggle_instance_favourite(mid))
-
-        primary_key = self._find_lod_primary_key(inst)
-        if primary_key is not None:
-            menu.addSeparator()
-            current = getattr(self, '_lod_overrides', {}).get(primary_key)
-            for mode, label in (('normal', "Show Normal"), ('lod', "Show LOD"),
-                                ('both', "Show Both")):
-                act = menu.addAction(label)
-                act.setCheckable(True)
-                act.setChecked(current == mode)
-                act.triggered.connect(
-                    lambda checked=False, k=primary_key, m=mode: self._set_lod_override(k, m))
-            clear_act = menu.addAction("Use Global Setting")
-            clear_act.setEnabled(current is not None)
-            clear_act.triggered.connect(
-                lambda checked=False, k=primary_key: self._set_lod_override(k, None))
-
-        menu.exec(view.viewport().mapToGlobal(pos))
 
     def _toggle_instance_favourite(self, model_id): #vers 1
         """Add/remove a model_id from favourite_objects."""
@@ -21162,7 +16676,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         view = getattr(self, '_instance_table', None)
         if view is None:
             return
-        model = _InstanceTableModel(loader.instances, loader)
+        model = _InstanceTableModel(loader.instances, loader, changed_fn=self._inst_changed)
         view.setModel(model)
         sel_model = view.selectionModel()
         if sel_model is not None:
@@ -21182,240 +16696,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._center_on_instance(inst)
 
 
-    def _create_control_dock(self): #vers 2
-        """Control Panel dock - replicates MooMapper's "Hide/Show
-        Control Panel"."""
-        panel = QWidget()
-        lay = QHBoxLayout(panel)
-        lay.setContentsMargins(4, 2, 4, 2)
-        lay.setSpacing(10)
-
-        H = self._COMPACT_BUTTON_H   # 18px, shared by every control here
-        from PyQt6.QtWidgets import QAbstractSpinBox
-
-        # setFixedHeight(18) alone clips text - Qt's default style reserves
-        # more internal padding/border than 18px leaves room for. Stripping
-        # that padding via stylesheet lets the text actually fit in 18px,
-        # rather than quietly making the boxes taller than asked for. This
-        # is a known, pre-existing issue (see TODO.md - the same 18px
-        # clipping problem exists in other places in this file too).
-        _COMPACT_STYLE = "padding: 0px 2px; margin: 0px; border-width: 1px;"
-
-        def _h18(*widgets):  #vers 2
-            for w in widgets:
-                w.setFixedHeight(H)
-                existing = w.styleSheet()
-                w.setStyleSheet((existing + "; " if existing else "") + _COMPACT_STYLE)
-
-        themecol = self.app_settings.get_theme_colors()
-        panel_bg = themecol.get('panel_bg')
-
-        def _style_box(box):  #vers 1
-            if panel_bg:
-                box.setStyleSheet(f"QGroupBox {{ background: {panel_bg}; }}")
-
-        # - Position (X, Y, Z) + Move There
-        pos_box = QGroupBox("Position (X, Y, Z)")
-        _style_box(pos_box)
-        pos_lay = QHBoxLayout(pos_box)
-        self._cp_pos_x = QDoubleSpinBox(); self._cp_pos_x.setRange(-100000, 100000)
-        self._cp_pos_y = QDoubleSpinBox(); self._cp_pos_y.setRange(-100000, 100000)
-        self._cp_pos_z = QDoubleSpinBox(); self._cp_pos_z.setRange(-100000, 100000)
-        move_there_btn = QPushButton("Move There")
-        move_there_btn.setToolTip("Centre all World View panes' cameras on this\n"
-                                  "typed position - the direct type-in alternative\n"
-                                  "to nudging/clicking an object")
-        move_there_btn.clicked.connect(self._on_move_there_clicked)
-        for spin in (self._cp_pos_x, self._cp_pos_y, self._cp_pos_z):
-            spin.setDecimals(2)
-            spin.setMinimumWidth(60)
-            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
-            pos_lay.addWidget(spin)
-        pos_lay.addWidget(move_there_btn)
-        _h18(self._cp_pos_x, self._cp_pos_y, self._cp_pos_z, move_there_btn)
-        lay.addWidget(pos_box)
-
-        # - Time + Zoom + Reset View, stacked in one compact column
-        time_view_box = QGroupBox("Time && View")
-        _style_box(time_view_box)
-        time_view_lay = QVBoxLayout(time_view_box)
-        time_row = QHBoxLayout()
-        time_lbl = QLabel("Time:")
-        self._cp_time_combo = QComboBox()
-        self._cp_time_combo.addItems([f"{h:02d}:00" for h in range(24)])
-        self._cp_time_combo.setCurrentText("09:00")
-        self._cp_time_combo.setToolTip("STUB - no time-of-day simulation built yet\n"
-                                       "(would matter for TOBJ/timed object rendering)")
-        _h18(time_lbl, self._cp_time_combo)
-        time_row.addWidget(time_lbl)
-        time_row.addWidget(self._cp_time_combo)
-        time_view_lay.addLayout(time_row)
-
-        zoom_row = QHBoxLayout()
-        zoom_lbl = QLabel("Zoom:")
-        zoom_minus_btn = QPushButton("-"); zoom_minus_btn.setFixedWidth(28)
-        zoom_minus_btn.clicked.connect(lambda: self._on_control_panel_zoom(1.15))
-        zoom_plus_btn = QPushButton("+"); zoom_plus_btn.setFixedWidth(28)
-        zoom_plus_btn.clicked.connect(lambda: self._on_control_panel_zoom(0.85))
-        _h18(zoom_lbl, zoom_minus_btn, zoom_plus_btn)
-        zoom_row.addWidget(zoom_lbl)
-        zoom_row.addWidget(zoom_minus_btn)
-        zoom_row.addWidget(zoom_plus_btn)
-        zoom_row.addStretch()
-        time_view_lay.addLayout(zoom_row)
-
-        reset_view_btn = QPushButton("Reset View")
-        reset_view_btn.setToolTip("Reset yaw/pitch/pan and re-fit the camera to\n"
-                                  "the currently loaded instances, for every pane")
-        reset_view_btn.clicked.connect(self._on_control_panel_reset_view)
-        _h18(reset_view_btn)
-        time_view_lay.addWidget(reset_view_btn)
-        lay.addWidget(time_view_box)
-
-        # - Checkboxes: Enable Textures / Wireframe Mode / Alpha Blending /
-        #   First Person / Background Map
-        options_box = QGroupBox("Options")
-        _style_box(options_box)
-        options_lay = QVBoxLayout(options_box)
-
-        self._cp_enable_textures_chk = QCheckBox("Enable Textures")
-        self._cp_enable_textures_chk.setChecked(True)
-        self._cp_enable_textures_chk.setToolTip(
-            "STUB - texture binding for real mesh rendering isn't wired up yet")
-
-        self._cp_wireframe_chk = QCheckBox("Wireframe Mode")
-        self._cp_wireframe_chk.setToolTip(
-            "Same as choosing Wireframe in the Render Mode dropdown (Plotting ribbon)")
-        self._cp_wireframe_chk.toggled.connect(self._on_control_panel_wireframe_toggled)
-
-        self._cp_alpha_chk = QCheckBox("Alpha Blending")
-        self._cp_alpha_chk.setChecked(True)
-        self._cp_alpha_chk.setToolTip("STUB - not yet connected to anything")
-
-        self._cp_first_person_chk = QCheckBox("First Person")
-        self._cp_first_person_chk.setToolTip(
-            "STUB - no first-person navigation mode built yet, only orbit/pan camera controls")
-
-        self._cp_background_map_chk = QCheckBox("Background Map")
-        self._cp_background_map_chk.setToolTip(
-            "STUB - no reference background map image support built yet")
-
-        for chk in (self._cp_enable_textures_chk, self._cp_wireframe_chk,
-                    self._cp_alpha_chk, self._cp_first_person_chk,
-                    self._cp_background_map_chk):
-            _h18(chk)
-            options_lay.addWidget(chk)
-        lay.addWidget(options_box)
-
-        # - Background colour + "Normal Mode" dropdown (mode is STUB -
-        #   MooMapper shows this but its exact purpose isn't clear from
-        #   the reference screenshot alone), stacked in one column
-        display_box = QGroupBox("Display")
-        _style_box(display_box)
-        display_lay = QVBoxLayout(display_box)
-
-        bg_row = QHBoxLayout()
-        bg_lbl = QLabel("Background:")
-        self._cp_bg_combo = QComboBox()
-        self._cp_bg_combo.addItems(["Default", "Black", "White", "Dark Grey"])
-        self._cp_bg_combo.currentTextChanged.connect(self._on_control_panel_bg_changed)
-        _h18(bg_lbl, self._cp_bg_combo)
-        bg_row.addWidget(bg_lbl)
-        bg_row.addWidget(self._cp_bg_combo)
-        display_lay.addLayout(bg_row)
-
-        mode_row = QHBoxLayout()
-        mode_lbl = QLabel("Mode:")
-        self._cp_mode_combo = QComboBox()
-        self._cp_mode_combo.addItems(["Normal Mode"])
-        self._cp_mode_combo.setToolTip(
-            "STUB - MooMapper shows a mode dropdown here, but its exact purpose isn't confirmed yet")
-        _h18(mode_lbl, self._cp_mode_combo)
-        mode_row.addWidget(mode_lbl)
-        mode_row.addWidget(self._cp_mode_combo)
-        display_lay.addLayout(mode_row)
-        lay.addWidget(display_box)
-
-        # - Dragging Controls legend - matches the actual current
-        #   MapViewport controls (configure_movement/mouseMoveEvent),
-        #   not a stub - this reflects real, working behaviour.
-        controls_box = QGroupBox("Dragging Controls")
-        if panel_bg:
-            controls_box.setStyleSheet(
-                f"QGroupBox {{ background: {panel_bg}; }} "
-                f"QGroupBox QLabel {{ background: {panel_bg}; }}")
-        controls_lay = QVBoxLayout(controls_box)
-        for line in (
-            "Middle Btn: Move Camera (pan)",
-            "Right Btn: Rotate Camera (3D pane only)",
-            "Left Btn (click, no drag): Select Object & Zoom In",
-            "Mouse Wheel: Zoom",
-        ):
-            line_lbl = QLabel(line)
-            _h18(line_lbl)
-            controls_lay.addWidget(line_lbl)
-        note = QLabel("(button assignment is configurable in Settings)")
-        note.setStyleSheet("color: palette(mid);")
-        _h18(note)
-        controls_lay.addWidget(note)
-        lay.addWidget(controls_box)
-
-        lay.addStretch()
-
-        dock = QDockWidget("Control Panel", self)
-        dock.setObjectName("Control Panel")
-        dock.setWidget(panel)
-
-        self._control_panel_dock = dock
-        return dock
 
 
-    def _on_move_there_clicked(self): #vers 1
-        x, y, z = self._cp_pos_x.value(), self._cp_pos_y.value(), self._cp_pos_z.value()
-        for pane in getattr(self, '_world_panes', []):
-            pane._pan_x = -x
-            pane._pan_y = -y
-            pane.update()
 
-    def _on_control_panel_wireframe_toggled(self, checked): #vers 1
-        """Wireframe Mode checkbox - mirrors the Render Mode dropdown
-        rather than being a separate, independent control, so the two
-        can't disagree with each other."""
-        self._set_render_mode('wireframe' if checked else 'solid')
-        lod_btn = getattr(self, '_render_mode_button', None)
-        if lod_btn is not None:
-            menu = lod_btn.menu()
-            for act in menu.actions():
-                act.setChecked(act.text() == ("Wireframe" if checked else "Solid"))
 
-    def _on_control_panel_zoom(self, factor): #vers 1
-        for pane in getattr(self, '_world_panes', []):
-            pane._dist = max(0.1, min(50000.0, pane._dist * factor))
-            if pane._projection == 'ortho':
-                try:
-                    pane.resizeGL(pane.width(), pane.height())
-                except Exception:
-                    pass
-            pane.update()
 
-    def _on_control_panel_reset_view(self): #vers 1
-        for pane in getattr(self, '_world_panes', []):
-            pane.reset_view()
-
-    def _on_control_panel_bg_changed(self, text): #vers 1
-        colors = {
-            "Default": None,
-            "Black": (0, 0, 0),
-            "White": (255, 255, 255),
-            "Dark Grey": (40, 40, 40),
-        }
-        rgb = colors.get(text)
-        for pane in getattr(self, '_world_panes', []):
-            pane.set_bg_color_override(rgb)
 
     # --- Editing Panel: IPL/IDE/DAT/IMG tabs (ported from map_workshop_old_version.py) ---
 
-    def _load_game_folder(self, preset_root: str = None): #vers 2
+    def _load_game_folder(self, preset_root: str = None): #vers 4
         """Load a GTA game's world data (DAT -> IDE -> IPL, full engine-
         order two-phase load) via the existing GTAWorldLoader - this is
         the Map Editor's actual data layer, already handling multi-game
@@ -21423,6 +16712,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         nothing new needed here beyond wiring it into the UI."""
         from PyQt6.QtWidgets import QFileDialog
         from apps.methods.gta_dat_parser import detect_game, GTAWorldLoader
+        if not self.confirm_close("Load World"):
+            return
 
         if preset_root:
             folder = preset_root
@@ -21430,16 +16721,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             folder = QFileDialog.getExistingDirectory(self, "Select GTA game folder")
             if not folder:
                 return
+        from apps.methods.gta_dat_parser import resolve_game_root
+        folder = resolve_game_root(folder)
 
         game = detect_game(folder)
         if not game:
             QMessageBox.warning(self, "Load Game Folder",
                 f"Couldn't detect a supported GTA game in:\n{folder}\n\n"
                 "Expected a 'data' folder containing gta3.dat, gta_vc.dat, "
-                "or gta.dat.")
+                "or gta.dat (IV: common/data/gta.dat).")
             return
 
         loader = GTAWorldLoader(game)
+        self._apply_vc_layout_ipl_stems(loader)
         loader.lazy_ipl_loading = True   # don't load/scan any
                                          # IPL's content (or its models'
                                          # geometry/textures) until the
@@ -21450,17 +16744,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._game_root = folder
         self._apply_loaded_world(loader, game, ok, "Load Game Folder")
 
-    def _show_map_load_menu(self): #vers 1
-        """Menu shown from the titlebar's Load button."""
-        menu = QMenu(self)
-        menu.addAction("Load Game Folder…", self._load_game_folder)
-        menu.addAction("Load Game DAT File…", self._load_game_dat_file)
-        menu.exec(self.tb_load_btn.mapToGlobal(
-            self.tb_load_btn.rect().bottomLeft()))
 
     def _auto_load_last_world(self): #vers 1
         """Auto-load the most recently used game world on startup
-        (Aug 20 2026, per Keith's own explicit "option 2" choice).
+        (Aug 20 2026  own explicit "option 2" choice).
         Uses the same real recent_dat_files list/_load_game_dat_file
         path the Recent menu's own entries already use, rather than a
         separate mechanism - the most recent entry is always index 0
@@ -21490,11 +16777,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QApplication.processEvents()
         self._load_game_dat_file(preset_dat_path=recent[0])
 
-    def _load_game_dat_file(self, preset_dat_path: str = None, force_preload_img: bool = False): #vers 2
+    def _load_game_dat_file(self, preset_dat_path: str = None, force_preload_img: bool = False): #vers 5
         """Load a GTA game's world data starting from one specific .dat
         file, rather than a whole game folder."""
         from PyQt6.QtWidgets import QFileDialog
-        from apps.methods.gta_dat_parser import detect_game_from_dat_filename, GTAWorldLoader
+        from apps.methods.gta_dat_parser import (detect_game_from_dat_filename, GTAWorldLoader,
+                                                 dat_game_root)
+        if not self.confirm_close("Load World"):
+            return
 
         if preset_dat_path:
             dat_path = preset_dat_path
@@ -21514,8 +16804,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 "shared across games and can't be identified by name alone.")
             return
 
-        game_root = os.path.normpath(os.path.join(os.path.dirname(dat_path), ".."))
+        game_root = dat_game_root(dat_path, game)   # data/, sol/, IV or flat iOS
         loader = GTAWorldLoader(game)
+        self._apply_vc_layout_ipl_stems(loader)
         loader.lazy_ipl_loading = True
         ok = loader.load_from_dat(dat_path, game_root)
         self._game_root = game_root
@@ -21563,67 +16854,20 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.map_settings.save()
         self._refresh_recent_dat_menu()
 
-    def _show_world_load_summary(self, title, summary_text, preloaded_files): #vers 2
-        """Real replacement for the plain QMessageBox.information this
-        summary used to show (Aug 20 2026, per Keith: "that dat
-        window, countdown from 10, then automatically press ok, also
-        show the preloaded files in that dialog window").
-
-        Appends a real "Preloaded:" line when anything was actually
-        preloaded this load, and - only when Keith's own new Auto-
-        dismiss setting is on - makes the OK button count down its
-        own label each second and click itself once it reaches zero,
-        rather than needing to be dismissed by hand every time
-        (useful alongside Auto-load last world).
-
-        Real fix (Aug 21 2026, per Keith's own real, uploaded
-        tidyup.png screenshot: "this needs to be tidied up, even if
-        it has to scroll one entry per line") - the preloaded files
-        list used to be joined into one, single, comma-separated
-        QLabel line with no word-wrap at all, running straight off
-        the right edge of the dialog rather than wrapping or
-        scrolling. Now its own real QListWidget, one real filename
-        per row, height-capped so a long real list scrolls inside its
-        own real, fixed-height box instead of stretching the whole
-        dialog taller without limit."""
-        print(f"[MapWorkshop-MARKER] _show_world_load_summary shown (title={title!r}, id={id(self)})")
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title)
-        layout = QVBoxLayout(dlg)
-        layout.addWidget(QLabel(summary_text))
-
-        if preloaded_files:
-            layout.addWidget(QLabel("Preloaded:"))
-            preload_list = QListWidget()
-            preload_list.addItems(preloaded_files)
-            preload_list.setMaximumHeight(160)
-            preload_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-            layout.addWidget(preload_list)
-
-        ok_btn = QPushButton("OK")
-        ok_btn.setDefault(True)
-        layout.addWidget(ok_btn)
-        ok_btn.clicked.connect(dlg.accept)
-
+    def _show_world_load_summary(self, title, summary_text, preloaded_files, load_dlg=None): #vers 3
+        """Summary shown in the shared load window; waits until it closes."""
+        dlg = load_dlg or _IplLoadDialog(self, 1)
+        seconds = None
         if self.map_settings.get('auto_dismiss_summary_dialog'):
-            remaining = [int(self.map_settings.get('auto_dismiss_summary_seconds', 10))]
-            ok_btn.setText(f"OK ({remaining[0]})")
-            timer = QTimer(dlg)
-            def _tick(): #vers 1
-                remaining[0] -= 1
-                if remaining[0] <= 0:
-                    timer.stop()
-                    dlg.accept()
-                else:
-                    ok_btn.setText(f"OK ({remaining[0]})")
-            timer.timeout.connect(_tick)
-            timer.start(1000)
-
-        dlg.exec()
+            seconds = int(self.map_settings.get('auto_dismiss_summary_seconds', 10))
+        dlg.show_summary(title, summary_text, preloaded_files, seconds)
+        if dlg.isVisible():
+            loop = QEventLoop()
+            dlg.finished.connect(loop.quit)
+            loop.exec()
 
     def _apply_loaded_world(self, loader, game, ok, source_desc): #vers 2
-        """Real re-entrancy guard (Aug 20 2026, per Keith's own
+        """ re-entrancy guard (Aug 20 2026  own
         terminal markers: two full _apply_loaded_world calls on the
         exact same instance, back to back, for the same load) - the
         real root cause: __init__'s own deferred QTimer.singleShot(0,
@@ -21648,7 +16892,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         finally:
             self._applying_loaded_world = False
 
-    def _apply_loaded_world_impl(self, loader, game, ok, source_desc): #vers 1
+    def _apply_loaded_world_impl(self, loader, game, ok, source_desc): #vers 11
         """Shared post-load handling for both _load_game_folder and
         _load_game_dat_file - status message, populating the World View
         panes/Instance List/IPL Sections panel, and the summary/error
@@ -21664,16 +16908,23 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # loaded, if that grid mode is active (Aug 20 2026)
         vp_for_grid = getattr(self, 'preview_widget', None)
         if vp_for_grid is not None and hasattr(vp_for_grid, 'set_radar_grid_extent'):
-            from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS
+            from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS, WATER_GRID_PRESETS
             game_key_for_grid = getattr(loader, 'game', 'sa')
             preset_for_grid = RADAR_GRID_PRESETS.get(game_key_for_grid, RADAR_GRID_PRESETS['sa'])
             grid_size_for_grid = preset_for_grid['grid_size']
             vp_for_grid.set_radar_grid_extent(
                 grid_size_for_grid / preset_for_grid['tiles_per_side'], grid_size_for_grid / 2.0)
             if hasattr(vp_for_grid, 'set_water_map_extent'):
-                vp_for_grid.set_water_map_extent(grid_size_for_grid / 2.0)
+                # Water's own real grid size can genuinely differ from
+                # radar's (Sep 5 2026, confirmed for SOL against real
+                # engine source - see WATER_GRID_PRESETS' own
+                # docstring) - use it here too, not radar's, so the
+                # wrap-around extent below matches the actual cell
+                # positions _waterpro_to_cells already uses.
+                water_preset_for_grid = WATER_GRID_PRESETS.get(game_key_for_grid, preset_for_grid)
+                vp_for_grid.set_water_map_extent(water_preset_for_grid['grid_size'] / 2.0)
         # Auto-detect timecyc.dat next to this world's own main .dat
-        # file (Aug 20 2026, per Keith: "we need to be able to detect
+        # file (Aug 20 2026,  "we need to be able to detect
         # the timecyc.dat file without the need for a path, and still
         # keep the toggle") - re-checked on every world load (not just
         # once), so switching between different games' maps picks up
@@ -21683,7 +16934,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if auto_timecyc_path:
             self.map_settings.set('timecyc_path', auto_timecyc_path)
             if vp_for_grid is not None and hasattr(vp_for_grid, 'set_timecyc_path'):
-                vp_for_grid.set_timecyc_path(auto_timecyc_path)
+                vp_for_grid.set_timecyc_path(auto_timecyc_path, known_game=getattr(loader, 'game', None))
         # Same for the radar tex layer, if it's on (Aug 20 2026) -
         # moved below, after model_cache.index_img_files() actually
         # runs (search "radar tex layer needs the freshly-indexed") -
@@ -21712,17 +16963,27 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             from apps.components.Map_Editor.depends.model_cache import ModelCache
             model_cache = ModelCache()
             self._model_cache = model_cache
+        model_cache.set_texture_limit(self._texture_limits(), self.map_settings.get('tex_keep_dxt'))
         model_cache.index_img_files(loader.get_img_paths())
-        print(f"[MapWorkshop-MARKER] model_cache.index_img_files done "
-              f"({len(loader.get_img_paths())} paths, id={id(self)})")
+        col_in_img = model_cache.col_entries_found_in_img
+        if col_in_img:
+            self._set_status(
+                f"Indexed {len(loader.get_img_paths())} IMG archive(s) - "
+                f"found {col_in_img} .col file(s) inside them")
+            if self.main_window and hasattr(self.main_window, 'log_message'):
+                self.main_window.log_message(
+                    f"Found {col_in_img} .col file(s) in IMG archives "
+                    f"({len(model_cache._col_img_index)} model name(s) indexed)")
+        QApplication.processEvents()
 
         # Retool the world load's own already-working water auto-load
-        # (Aug 20 2026, re-applied per Keith: "get the water working,
+        # (Aug 20 2026, re-applied  "get the water working,
         # from the preloaded file") - loader.waterpro/water_shapes are
         # already real and populated by this same world load, so
-        # water2 doesn't need Keith to separately re-pick the same
+        # water2 doesn't need ,separately re-pick the same
         # file through Preload every time - only the texture still
         # does.
+        self._apply_radar_settings()
         try:
             self._try_auto_water2_from_loader()
         except Exception as e:
@@ -21731,7 +16992,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status(f"Water auto-apply failed: {e}")
 
         # Also register each real IMG file as a real, visible tab in
-        # IMG Factory's own main tab system (Aug 20 2026, per Keith:
+        # IMG Factory's own main tab system (Aug 20 2026, .per:
         # "loading img into img factory the other tools like txd
         # workshop, rader workshop, see the files, but preloading the
         # img into map workshop, the radar workshop, model workshop,
@@ -21753,14 +17014,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 fp = info.get('file_path') if isinstance(info, dict) else None
                 if fp:
                     already_open.add(os.path.normpath(fp))
-            for img_path in loader.get_img_paths():
-                if os.path.normpath(img_path) not in already_open:
-                    print(f"[MapWorkshop-MARKER] _load_img_file_in_new_tab({img_path!r})")
-                    mw._load_img_file_in_new_tab(img_path)
+            to_open = [p for p in loader.get_img_paths()
+                       if os.path.normpath(p) not in already_open]
+            if to_open:                    # reported in the world load window
+                self._world_load_dlg = _IplLoadDialog(self, 1)
+                self._world_load_dlg.start_file(f"{game.upper()} world - loading IMG archives", 0)
+                mw.load_img_files_batch(to_open, "Map Workshop - loading IMG archives",
+                                        report=self._world_load_dlg)
 
         # radar tex layer needs the freshly-indexed ModelCache, so
         # this runs here rather than earlier in this method (Aug 20
-        # 2026, per Keith: "those radar.txd files are in the gta3...
+        # 2026,  "those radar.txd files are in the gta3...
         # unless it's SOL where they're in another file").
         if (vp_for_grid is not None and hasattr(vp_for_grid, 'set_radar_tex_layer')
                 and self.map_settings.get('show_radar_tex_layer')):
@@ -21768,12 +17032,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             tile_textures_for_tex = self._load_radar_tex_tiles(game_key_for_tex)
             vp_for_grid.set_radar_tex_layer(True, tile_textures_for_tex, game_key_for_tex)
 
-        # Real in-game water texture (Aug 20 2026, per Keith: "the
+        #  in-game water texture (Aug 20 2026,  "the
         # ../model/particle.txd water textures... with the option
         # settings path for using other water textures") - same real
         # reason as radar's own tex layer just above: needs the
         # freshly-indexed ModelCache, so this runs here too. Only
-        # attempted when Keith's own "Use water texture" toggle is on
+        # attempted when my own "Use water texture" toggle is on
         # - matches that same toggle's own existing meaning (prefer a
         # real texture over the plain flat fill) rather than a second,
         # separate on/off switch. Skipped when a real, manually-chosen
@@ -21789,7 +17053,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if water_tex is not None:
                 vp_for_grid.set_water2_texture_rgba(*water_tex)
 
-        # CRT time overlay (Aug 20 2026, per Keith: "[TIME] showing
+        # CRT time overlay (Aug 20 2026,  "[TIME] showing
         # the time in the viewpoint like old style green CRT, click on
         # time for stop and start, right click for settings") - wired
         # once per real viewport instance (guarded, since this real
@@ -21821,8 +17085,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status("Indexing COL files...")
             QApplication.processEvents()
             model_cache.index_col_files(col_paths)
-        # A genuine new world load
+        # A genuine new world load - also clear previously uploaded
+        # GL textures here (not just the geometry cache), since
+        # _refresh_world_view_impl no longer wipes/reuploads textures
+        # on every call (see its own #vers note)
         self._geometry_conversion_cache = {}
+        vp_for_clear = getattr(self, 'preview_widget', None)
+        if vp_for_clear is not None and hasattr(vp_for_clear, 'clear_textures'):
+            if hasattr(vp_for_clear, 'makeCurrent'):
+                vp_for_clear.makeCurrent()
+            vp_for_clear.clear_textures()
 
         from collections import Counter as _Counter
         self._object_instance_counts = _Counter()
@@ -21848,7 +17120,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QApplication.processEvents()
         self._populate_ipl_sections(loader)
 
-        # Real fix (Aug 20 2026, per Keith: "preload from startup
+        #  fix (Aug 20 2026,  "preload from startup
         # does not work, but if I bring up preload dialog, and press
         # load, it works?") - moved here, after _populate_ipl_sections
         # actually runs, not before it. The earlier position ran a
@@ -21860,12 +17132,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # reopening the Preload dialog later (table already built by
         # then) but never during the automatic path itself.
         preloaded_files = []
+        load_dlg = getattr(self, '_world_load_dlg', None) or _IplLoadDialog(self, 1)
+        self._world_load_dlg = None             # one window: archives, preloads, summary
+        load_dlg.start_file(f"{game.upper()} world - preloading", 0)
+        self._ipl_load_dlg = load_dlg
         try:
             preloaded_files = self._apply_saved_preload_picks() or []
         except Exception as e:
             import traceback
             traceback.print_exc()
             self._set_status(f"Preload auto-apply failed: {e}")
+            load_dlg.message(f"Preload failed: {e}")
+        finally:
+            self._ipl_load_dlg = None
 
         self._set_status(f"Populating Object Browser ({len(loader.objects)} objects)...")
         QApplication.processEvents()
@@ -21906,7 +17185,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(
             f"Loaded {game.upper()} world: {len(loader.objects)} objects, "
             f"{len(loader.instances)} instances, {loader.stats.ipl_files} IPL files")
-        self._show_world_load_summary(source_desc, loader.get_summary(), preloaded_files)
+        self._show_world_load_summary(source_desc, loader.get_summary(), preloaded_files, load_dlg)
 
         if getattr(loader, 'lazy_ipl_loading', False) and loader.available_ipls:
             if self.map_settings.get('show_load_options_dialog', True):
@@ -21917,94 +17196,53 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                         self._load_selected_ipls_with_log(
                             loader, model_cache, stems, load_models, load_textures)
 
-    def _load_selected_ipls_with_log(self, loader, model_cache, stems, load_models, load_textures): #vers 2
+    def _load_selected_ipls_with_log(self, loader, model_cache, stems, load_models, load_textures): #vers 4
         """Load a batch of specific IPLs (from the Load Options dialog)"""
         total_stems = len(stems)
-        progress = QProgressDialog("Loading IPL files…", "Cancel", 0, total_stems, self)
-        progress.setWindowTitle("Loading IPL Files")
-        progress.setMinimumDuration(0)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-
+        dlg = _IplLoadDialog(self, total_stems)
         verbose = self.map_settings.get('show_verbose_loading_dialog')
-        dlg = _VerboseLoadingDialog("Loading IPL Files", self) if verbose else None
-        if dlg is not None:
-            dlg.show()
-
-        def _cancelled(): #vers 1
-            return progress.wasCanceled()
-
-        def _append(line): #vers 1
-            if dlg is not None:
-                dlg.add_line(line)
-            else:
-                QApplication.processEvents()
-
         any_loaded = False
         for idx, stem in enumerate(stems):
-            if _cancelled():
-                _append("Cancelled - remaining IPLs not loaded")
+            if dlg.cancelled:
+                dlg.message("Cancelled - remaining IPLs not loaded")
                 break
             entry = loader.available_ipls.get(stem)
             display_name = os.path.basename(entry.abs_path) if entry else stem
-            progress.setLabelText(f"Loading {display_name} ({idx + 1} of {total_stems})")
-            progress.setValue(idx)
-            if dlg is not None:
-                dlg.add_header(f"Loading {display_name} ({idx + 1} of {total_stems})")
-                dlg.set_progress(idx, total_stems)
-            _append(f"loading {display_name}")
+            dlg.start_file(display_name, idx)
 
             before_count = len(loader.instances)
             result = loader.load_ipl_by_name(stem)
             if not result.success:
-                _append(f"{display_name} - failed to load"
-                       + (f": {result.errors[0]}" if result.errors else ""))
+                dlg.message(f"{display_name} - failed to load"
+                            + (f": {result.errors[0]}" if result.errors else ""))
                 continue
             any_loaded = True
+            for w in result.warnings:
+                dlg.message(f"WARNING: {w}")
+                if self.main_window and hasattr(self.main_window, 'log_message'):
+                    self.main_window.log_message(f"[{display_name}] {w}")
 
             new_instances = loader.instances[before_count:]
-            for i, inst in enumerate(new_instances):
-                _append(f"{inst.model_id}, {inst.model_name}, {inst.interior}, "
-                        f"{inst.pos_x}, {inst.pos_y}, {inst.pos_z}, "
-                        f"{inst.scale_x}, {inst.scale_y}, {inst.scale_z}, "
-                        f"{inst.rot_x}, {inst.rot_y}, {inst.rot_z}, {inst.rot_w}")
-                if _cancelled():
-                    break
+            if verbose:
+                for inst in new_instances:
+                    dlg.message(f"{inst.model_id}, {inst.model_name}, {inst.interior}, "
+                                f"{inst.pos_x}, {inst.pos_y}, {inst.pos_z}, "
+                                f"{inst.scale_x}, {inst.scale_y}, {inst.scale_z}, "
+                                f"{inst.rot_x}, {inst.rot_y}, {inst.rot_z}, {inst.rot_w}")
 
-            # Missing-model/texture detection - genuinely absent from
-            # any indexed archive, not a parse error in the IPL itself
-            missing = []
-            seen_models = set()
-            for inst in new_instances:
-                if inst.model_name in seen_models:
-                    continue
-                seen_models.add(inst.model_name)
-                obj = loader.get_object(inst.model_id)
-                txd_name = obj.txd_name if obj else ""
-                if load_models and not model_cache.is_dff_indexed(inst.model_name):
-                    missing.append(f"{inst.model_name}.dff")
-                if load_textures and txd_name and not model_cache.is_txd_indexed(txd_name):
-                    missing.append(f"{txd_name}.txd")
-                if load_models:
-                    model_cache.get_geometry(inst.model_name)
-                if load_textures and txd_name:
-                    model_cache.get_textures(txd_name)
+            missing = self._load_models_into_dialog(
+                dlg, loader, model_cache, new_instances, load_models, load_textures)
 
             problem_count = result.error_count + result.warning_count
             if missing:
-                _append(f"{display_name} loaded - "
-                        + "/ ".join(missing) + " missing from img file")
+                dlg.message(f"{display_name} loaded - "
+                            + "/ ".join(missing) + " missing from img file")
                 self._write_ipl_error_log(result)
             elif problem_count:
                 log_path = self._write_ipl_error_log(result)
-                _append(f"{display_name} loaded - {problem_count} issue(s) found"
-                        + (f", check {os.path.basename(log_path)} added to the maps folder"
-                           if log_path else ""))
-            else:
-                _append(f"{display_name} loaded - no errors")
-
-        progress.setValue(total_stems)
-        if dlg is not None:
-            dlg.set_progress(total_stems, total_stems)
+                dlg.message(f"{display_name} loaded - {problem_count} issue(s) found"
+                            + (f", check {os.path.basename(log_path)} added to the maps folder"
+                               if log_path else ""))
 
         if any_loaded:
             self._all_instances = list(loader.instances)
@@ -22013,9 +17251,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             for pane in getattr(self, '_world_panes', []):
                 pane.set_instances(visible)
 
-        if dlg is not None:
-            dlg.add_header(f"Done - {'cancelled, ' if progress.wasCanceled() else ''}"
-                            f"{total_stems} IPL(s) processed")
+        dlg.finish(f"Done - {'cancelled, ' if dlg.cancelled else ''}{total_stems} IPL(s) processed")
 
     def _show_load_options_dialog(self, loader): #vers 1
         """Shown right after a world's IPL list is discovered (but
@@ -22131,7 +17367,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(1, 1, 1, 1)
         from apps.methods.imgfactory_svg_icons import get_remove_icon, get_file_icon, get_add_icon, get_close_icon
-        from PyQt6.QtWidgets import QButtonGroup
         title_row_widget = QWidget()
         title_row_widget.setObjectName("IPL_title_row")
         title_row = QHBoxLayout(title_row_widget)
@@ -22297,7 +17532,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             placeholder.setVisible(False)
         table.setVisible(True)
 
-    def _scan_binary_ipls_in_img_archives(self, loader): #vers 3
+    def _scan_binary_ipls_in_img_archives(self, loader): #vers 4
         """Scan every indexed IMG archive (gta3.img etc.) for .ipl-
         extension entries, associating binary ones with their parent
         text IPL rather than listing them as independent entries."""
@@ -22334,21 +17569,25 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                         model_cache._opened_img_files[img_path] = img
                 for entry in img.entries:
                     name = getattr(entry, 'name', '') or ''
-                    if not name.lower().endswith('.ipl'):
+                    is_wpl = name.lower().endswith('.wpl')   # GTA IV, always binary
+                    if not (is_wpl or name.lower().endswith('.ipl')):
                         continue
-                    try:
-                        head = img.read_entry_data(entry)[:64]
-                    except Exception:
-                        continue
-                    if detect_ipl_format(head) != 'binary':
-                        continue
+                    if not is_wpl:
+                        try:
+                            head = img.read_entry_data(entry)[:64]
+                        except Exception:
+                            continue
+                        if detect_ipl_format(head) != 'binary':
+                            continue
                     found_count += 1
                     entry_stem = os.path.splitext(name)[0].lower()
 
-                    # Match either the exact stem, or "{parent}_streamN"
+                    # Match the exact stem, "{parent}_streamN" or IV "{parent}_strbigN"
                     parent_stem = entry_stem
-                    if '_stream' in entry_stem:
-                        parent_stem = entry_stem.rsplit('_stream', 1)[0]
+                    for tag in ('_stream', '_strbig'):
+                        if tag in entry_stem:
+                            parent_stem = entry_stem.rsplit(tag, 1)[0]
+                            break
                     parent_display = text_stems.get(entry_stem) or text_stems.get(parent_stem)
 
                     if parent_display is not None:
@@ -22376,7 +17615,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 f"Found {found_count} binary IPL(s) in indexed IMG archives "
                 f"({associated_count} matched to a parent text IPL, {standalone_count} standalone)")
 
-    def _rebuild_ipl_sections_rows(self): #vers 3
+    def _rebuild_ipl_sections_rows(self): #vers 4
         """(Re)build every row from self._ipl_display_order - shared by
         the initial populate and by _move_ipl_section, so reordering
         doesn't duplicate the row-construction logic.."""
@@ -22456,6 +17695,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if fmt_tooltip:
                 fmt_item.setToolTip(fmt_tooltip)
             table.setItem(row, 2, fmt_item)
+        self._apply_dirty_highlight()
 
     def _move_ipl_section(self, ipl_name, direction): #vers 1
         """Move one IPL section up (-1) or down (+1) in the display
@@ -22472,7 +17712,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self.map_settings.set('ipl_sections_order', order)
         self.map_settings.save()
 
-    def _on_ipl_sections_context_menu(self, pos): #vers 2
+    def _on_ipl_sections_context_menu(self, pos): #vers 7
         """Right-click a row for Move Up/Down/Load Selected - explicit
         menu actions rather than drag-and-drop, since QTableWidget's
         built-in InternalMove drag-drop is a known source of subtle
@@ -22532,7 +17772,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         preload_act.setToolTip(
             "Browse the game's own data folder directly and load real,\n"
             "non-IPL files like waterpro.dat/water.dat/timecyc.dat -\n"
-            "see Keith's own real \"can't seem to find it otherwise\"\n"
+            "see my own real \"can't seem to find it otherwise\"\n"
             "request for why this exists alongside the IPL list above.")
         preload_act.triggered.connect(self._show_preload_dialog)
 
@@ -22572,10 +17812,48 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         #TODO; When working with SA files, have the ability to click on a text ipl, convert to binary.ipl.
         #save options, save to img file, save to desktop.
 
-        savebin_act = menu.addAction("Save Text as Binary IPL...")
-        savebin_act.setEnabled(is_loaded)
-        savebin_act.triggered.connect(
-            lambda checked=False, n=ipl_name: self._save_ipl_data_as_binary(n))
+        save_act = menu.addAction("Save IPL")
+        save_act.setToolTip("Write edits back to the original file (backup first)")
+        save_act.setEnabled(is_loaded)
+        save_act.triggered.connect(
+            lambda checked=False, n=ipl_name: self._save_ipl_in_place(n))
+        save_all_act = menu.addAction(f"Save All Changed IPLs ({len(getattr(self, '_dirty_ipls', ()))})")
+        save_all_act.setEnabled(bool(getattr(self, '_dirty_ipls', None)))
+        save_all_act.triggered.connect(lambda checked=False: self._save_all_ipls())
+        sp_menu = menu.addMenu("Save Points")
+        sp_create = sp_menu.addAction("Create Save Point")
+        sp_create.setEnabled(bool(getattr(self, '_dirty_ipls', None)))
+        sp_create.triggered.connect(lambda checked=False: self._create_savepoint("Manual"))
+        sp_menu.addAction("Restore Save Point...").triggered.connect(
+            lambda checked=False: self._restore_savepoint_dialog())
+        menu.addAction("Map Checks...").triggered.connect(
+            lambda checked=False: self._show_map_checks())
+        menu.addAction("IPL Format Checker...").triggered.connect(
+            lambda checked=False: self._show_ipl_format_checker())
+        menu.addAction("Script Placements (main.scm)...").triggered.connect(
+            lambda checked=False: self._show_script_placements())
+        menu.addAction("Engine Load Log...").triggered.connect(
+            lambda checked=False: self._show_engine_load_log())
+        menu.addAction("Show Changes (Diff)...").triggered.connect(
+            lambda checked=False: self._show_map_diff())
+        menu.addAction("Export Changes as Mod Package...").triggered.connect(
+            lambda checked=False: self._export_mod_package())
+        self._camera_bookmarks_menu(menu)
+
+        if getattr(loader, 'game', None) == 'sa':            # binary IPL is SA only
+            savebin_act = menu.addAction("Save Text as Binary IPL...")
+            savebin_act.setEnabled(is_loaded)
+            savebin_act.triggered.connect(
+                lambda checked=False, n=ipl_name: self._save_ipl_data_as_binary(n))
+
+        conv_act = menu.addAction("Convert to Game Format...")
+        conv_act.setEnabled(is_loaded)
+        conv_act.triggered.connect(lambda checked=False, n=ipl_name: self._save_ipl_as_game(n))
+        rb_names = [table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+                    for r in sorted({x.row() for x in table.selectionModel().selectedRows()})
+                    if table.item(r, 0) is not None] or [ipl_name]
+        rebase_act = menu.addAction(f"Rebase Area ({len(rb_names)} IPL)...")
+        rebase_act.triggered.connect(lambda checked=False, ns=rb_names: self._rebase_ipls_dialog(ns))
 
         # Save IPL Data As... / Unload (Aug 16 2026)
         save_full_act = menu.addAction("Save IPL Data As...")
@@ -22612,13 +17890,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         down_act.triggered.connect(lambda checked=False, n=ipl_name: self._move_ipl_section(n, 1))
         menu.exec(table.viewport().mapToGlobal(pos))
 
-    def _unload_ipl_section(self, ipl_name): #vers 1
+    def _unload_ipl_section(self, ipl_name): #vers 2
         """Actually remove an IPL's loaded content from memory -
         freeing it up, distinct from Hide (which only filters what's
         drawn; the data stays loaded either way)"""
         loader = getattr(self, '_world_loader', None)
         if loader is None:
             return
+        if not self._confirm_discard_ipls([ipl_name], "Unload"):
+            return
+        self._forget_ipl_baseline([ipl_name])
         stem = getattr(self, '_ipl_display_to_stem', {}).get(ipl_name)
 
         loader.instances[:] = [i for i in loader.instances if i.source_ipl != ipl_name]
@@ -22644,7 +17925,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._apply_ipl_visibility_filter()
         self._set_status(f"Unloaded {ipl_name}")
 
-    def _unload_all_ipl_sections(self): #vers 1
+    def _unload_all_ipl_sections(self): #vers 2
         """Unload every currently-loaded IPL at once (Aug 19 2026)"""
         loader = getattr(self, '_world_loader', None)
         if loader is None:
@@ -22654,6 +17935,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if not loaded_names:
             self._set_status("No loaded IPLs to unload")
             return
+        if not self._confirm_discard_ipls(loaded_names, "Unload All"):
+            return
+        self._forget_ipl_baseline(loaded_names)
         loaded_set = set(loaded_names)
 
         loader.instances[:] = [i for i in loader.instances if i.source_ipl not in loaded_set]
@@ -22687,7 +17971,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         by a fixed (dx,dy,dz) offset - added so converted/ported map
         data.
 
-        Undoable now (Aug 20 2026, per Keith: "Undo/redo for mapping
+        Undoable now (Aug 20 2026,  "Undo/redo for mapping
         changes") - was a real, significant gap: moving/rotating a
         whole IPL section (potentially many instances plus cull/zone/
         path/grge/enex/occl entries all at once) had no undo at all
@@ -22766,7 +18050,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         around a given (pivot_x, pivot_y) point, by angle_deg around
         the vertical (Z) axis (Aug 19 2026).
 
-        Undoable now (Aug 20 2026, per Keith: "Undo/redo for mapping
+        Undoable now (Aug 20 2026,  "Undo/redo for mapping
         changes") - same real gap and same real fix as _shift_ipl_
         coordinates' own docstring describes. _record_undo=False is
         used internally by the undo/redo closures below themselves."""
@@ -23055,13 +18339,26 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._on_ipl_selection_changed(names)
 
 
-    def _on_hover_context_menu(self, inst): #vers 1
+    def _on_hover_context_menu(self, inst): #vers 3
         """Fired by DFFViewport.set_hover_context_callback on a right-
         click while an instance is currently hover-highlighted (Aug
-        19 2026)"""
+        19 2026). Object actions work on the selection (or this object)."""
+        if inst not in self._selected_instances():
+            self._select_instances([inst])
+        n = len(self._selected_instances())
         menu = QMenu(self)
         info_act = menu.addAction("Info")
         textures_act = menu.addAction("Show Textures")
+        menu.addSeparator()
+        menu.addAction(f"Duplicate ({n})\tCtrl+D", self._duplicate_selected)
+        menu.addAction(f"Drop to Ground ({n})\tEnd", self._drop_selected_to_ground)
+        align = menu.addMenu("Align to last selected")
+        for ax in 'xyz':
+            align.addAction(ax.upper(), lambda a=ax: self._align_selected(a)).setEnabled(n > 1)
+        menu.addAction("Distribute evenly", self._distribute_selected).setEnabled(n > 2)
+        menu.addAction("Bake Prelight to DFF...", self._bake_prelight_selected)
+        menu.addSeparator()
+        menu.addAction(f"Delete ({n})\tDel", self._delete_selected_instances)
         chosen = menu.exec(QCursor.pos())
         if chosen is info_act:
             self._show_instance_edit_panel(inst)
@@ -23248,14 +18545,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if not path:
             return
         try:
-            with open(path, 'w', encoding='ascii', errors='replace') as f:
-                f.write("inst\n")
-                for inst in matching:
-                    f.write(f"{inst.model_id}, {inst.model_name}, {inst.interior}, "
-                            f"{inst.pos_x:.6f}, {inst.pos_y:.6f}, {inst.pos_z:.6f}, "
-                            f"{inst.rot_x:.7f}, {inst.rot_y:.7f}, {inst.rot_z:.7f}, {inst.rot_w:.7f}, "
-                            f"{inst.lod_index}\n")
-                f.write("end\n")
+            _rows = ["inst\n"] + [
+                f"{inst.model_id}, {inst.model_name}, {inst.interior}, "
+                f"{inst.pos_x:.6f}, {inst.pos_y:.6f}, {inst.pos_z:.6f}, "
+                f"{inst.rot_x:.7f}, {inst.rot_y:.7f}, {inst.rot_z:.7f}, {inst.rot_w:.7f}, "
+                f"{inst.lod_index}\n" for inst in matching] + ["end\n"]
+            _write_ipl_lines(path, _rows)
         except Exception as e:
             QMessageBox.warning(self, "Save Binary IPL as Text", f"Failed to save: {e}")
             return
@@ -23300,17 +18595,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         try:
             from apps.methods.gta_dat_parser import write_binary_ipl_inst_only
             data = write_binary_ipl_inst_only(matching)
-            with open(path, 'wb') as f:
-                f.write(data)
+            from apps.methods.file_backup import safe_write_bytes
+            safe_write_bytes(path, data)
         except Exception as e:
             QMessageBox.warning(self, "Save Text as Binary IPL", f"Failed to save: {e}")
             return
         self._set_status(
             f"Saved {len(matching)} instances from {ipl_name} to binary IPL: {path}")
 
-    def _on_show_radar_tex_layer_toggled(self, checked): #vers 1
+    def _on_show_radar_tex_layer_toggled(self, checked): #vers 3
         """Show/hide the radar tex layer - real fix (Aug 20 2026, per
-        Keith: "The radar button also needs to switch the radar on
+         : "The radar button also needs to switch the radar on
         and off, and right-clicking the radar button should generate
         the radar... moving the Radar settings from the settings, to
         the button would follow the pattern of the other buttons") -
@@ -23329,12 +18624,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             game_key = getattr(loader, 'game', 'sa') if loader is not None else 'sa'
             tile_textures = self._load_radar_tex_tiles(game_key)
             vp.set_radar_tex_layer(True, tile_textures, game_key)
+            from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS
+            grid = RADAR_GRID_PRESETS.get(game_key, RADAR_GRID_PRESETS['sa'])['grid_size']
+            if vp._dist < grid / 12:                # inside one tile: one flat colour, zoom out
+                vp.set_camera_state(dist=grid * 0.6)
+                self._set_status("Radar on - zoomed out to show the map")
         else:
             vp.set_radar_tex_layer(False)
+        if getattr(self, '_vp_gauges', None) is not None:
+            self._vp_gauges.refresh()
 
     def _apply_ipl_controls_display_style(self): #vers 2
         """Switch every real overlay toggle button between its own
-        text label and its own icon (Aug 20 2026, per Keith: "we could
+        text label and its own icon (Aug 20 2026,  "we could
         add a toggle in settings, Show IPL Controls = as [Buttons] or
         ribbon icons") - each button falls back to text-only on its
         own if it was never actually given a real icon yet (see
@@ -23351,7 +18653,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _move_overlay_buttons_to_ribbon(self): #vers 2
         """Move every real overlay toggle button from IPL Controls
-        onto the new "Overlays" ribbon (Aug 20 2026, per Keith: "The
+        onto the new "Overlays" ribbon (Aug 20 2026,  "The
         New Icons on the IPL Control pane, can be moved to the
         ribbon" - the arrow in his own screenshot pointed from these
         exact buttons up to the top toolbar area).
@@ -23367,14 +18669,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         already-constructed widget re-parents it automatically - no
         need to change where these buttons are originally built.
 
-        Real fix (Aug 20 2026, per Keith: "in ribbon manager the new
+         fix (Aug 20 2026,  "in ribbon manager the new
         icons show up as Action, needs to show like the other icons,
         then name") - QToolBar.addWidget internally wraps the widget
         in a real QWidgetAction, but never copies the widget's own
         real text/icon onto it - RibbonManagerDialog's own real list-
         population line (act.text() or act.toolTip() or "Action")
         found both empty and fell all the way through to that literal
-        fallback string, exactly matching what Keith saw. Sets both
+        fallback string, exactly matching what   saw. Sets both
         explicitly on the real QWidgetAction addWidget returns, the
         same real text/icon _act's own QAction-based buttons already
         carry."""
@@ -23390,9 +18692,21 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if not btn.icon().isNull():
                 action.setIcon(btn.icon())
 
-    def _on_generate_radar_tiles_clicked(self): #vers 2
-        """Prompt for an output folder, then run _generate_radar_tiles
-        (Aug 20 2026)"""
+    def _on_generate_radar_tiles_clicked(self): #vers 3
+        """Offer to load every IPL, pick an output folder, generate, then offer Radar Workshop."""
+        hidden = sorted(getattr(self, '_hidden_ipls', set()))
+        if hidden and getattr(self, '_ipl_sections_table', None) is not None:
+            ans = QMessageBox.question(
+                self, "Generate Radar Tiles",
+                f"{len(hidden)} IPL(s) are not loaded - the radar will have gaps.\n\n"
+                "Load all IPLs first?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel)
+            if ans == QMessageBox.StandardButton.Cancel:
+                return
+            if ans == QMessageBox.StandardButton.Yes:
+                self._load_selected_ipl_sections(
+                    [self._ipl_display_order.index(n) for n in hidden if n in self._ipl_display_order])
         start_dir = self.map_settings.get('radar_tiles_output_dir') or os.path.expanduser("~")
         output_dir = QFileDialog.getExistingDirectory(
             self, "Select Output Folder for Radar Tiles", start_dir)
@@ -23400,10 +18714,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         self.map_settings.set('radar_tiles_output_dir', output_dir)
         self._generate_radar_tiles(output_dir)
+        if getattr(self, '_last_radar_tile_paths', None) and QMessageBox.question(
+                self, "Generate Radar Tiles",
+                f"{len(self._last_radar_tile_paths)} tile(s) saved.\n\nOpen them as a radar map "
+                "in Radar Workshop?") == QMessageBox.StandardButton.Yes:
+            self._send_radar_tiles_to_radar_workshop()
 
-    def _generate_radar_tiles(self, output_dir): #vers 2
+    def _generate_radar_tiles(self, output_dir, only=None): #vers 4
         """Generate every real radar/minimap tile for the currently
-        loaded world (Aug 20 2026)"""
+        loaded world (Aug 20 2026). only: tile indices to redo, None = all."""
         loader = getattr(self, '_world_loader', None)
         if loader is None or not getattr(loader, 'instances', None):
             QMessageBox.information(self, "Generate Radar Tiles",
@@ -23419,6 +18738,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         game_key = getattr(loader, 'game', 'sa')
         preset = RADAR_GRID_PRESETS.get(game_key, RADAR_GRID_PRESETS['sa'])
         tiles = compute_radar_grid(**preset)
+        if only is not None:
+            tiles = [t for t in tiles if t.index in set(only)]
         os.makedirs(output_dir, exist_ok=True)
 
         progress = QProgressDialog(
@@ -23426,12 +18747,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         saved = 0
 
-        # Real paths of every tile actually saved this run (Aug 20 2026)
-        self._last_radar_tile_paths = []
+        #  paths of every tile actually saved this run (Aug 20 2026)
+        if only is None or not getattr(self, '_last_radar_tile_paths', None):
+            self._last_radar_tile_paths = []
+        radar_layer = getattr(vp, '_show_radar_tex_layer', False)
+        vp._show_radar_tex_layer = False            # old radar must not show through gaps
         for tile in tiles:
             if progress.wasCanceled():
                 break
-            progress.setValue(tile.index)
+            progress.setValue(tiles.index(tile))
             progress.setLabelText(
                 f"Tile {tile.index} (row {tile.row}, col {tile.col})...")
             QApplication.processEvents()
@@ -23443,18 +18767,31 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 image = vp.capture_radar_tile(cx, cy, tile_size, show_grid=show_grid)
                 out_path = os.path.join(output_dir, f"radar{tile.index:02d}.png")
                 image.save(out_path)
-                self._last_radar_tile_paths.append(out_path)
+                if out_path not in self._last_radar_tile_paths:
+                    self._last_radar_tile_paths.append(out_path)
                 saved += 1
             except Exception as e:
                 print(f"[Radar Generator] Failed tile {tile.index}: {e}")
+        vp._show_radar_tex_layer = radar_layer
+        vp.update()
         progress.setValue(len(tiles))
         self._set_status(f"Generated {saved} of {len(tiles)} radar tiles to {output_dir}")
 
-    def _on_radar_tiles_context_menu(self, button, pos): #vers 3
+    def _on_radar_tiles_context_menu(self, button, pos): #vers 5
         """Right-click menu on the Radar button - "Send to TXD
         Workshop" (Aug 20 2026)"""
         menu = QMenu(button)
         tiles = getattr(self, '_last_radar_tile_paths', None)
+        menu.addAction("Radar / Water Alignment...").triggered.connect(self._show_radar_align_dialog)
+        fix = menu.addAction("Water fix (VC -400 X shift)")
+        fix.setCheckable(True)
+        fix.setChecked(self._water_fix_active())
+        fix.toggled.connect(self._set_water_fix)
+        menu.addSeparator()
+        regen = menu.addAction("Regenerate tiles touched by unsaved edits")
+        regen.setEnabled(bool(getattr(self, '_dirty_ipls', None)))
+        regen.triggered.connect(self._regen_changed_radar_tiles)
+        menu.addSeparator()
         act = menu.addAction("Send to TXD Workshop (pack PNGs into TXDs)")
         act.setEnabled(bool(tiles))
         if not tiles:
@@ -23483,9 +18820,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         act3.triggered.connect(self._export_radar_tiles_as_img)
         menu.exec(button.mapToGlobal(pos))
 
-    def _build_radar_tile_txd_bytes(self, png_path, serializer, name=None): #vers 1
-        """Build real TXD binary bytes for one real radar tile PNG,
-        using a caller-provided TXDSerializer instance (Aug 20 2026)"""
+    def _build_radar_tile_txd_bytes(self, png_path, name=None): #vers 2
+        """TXD bytes (D3D8 layout) for one radar tile PNG."""
         from PIL import Image
         img = Image.open(png_path).convert('RGBA')
         has_alpha = any(p[3] < 255 for p in img.getdata())
@@ -23500,9 +18836,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             'raster_format_flags': 0x2600 if not has_alpha else 0x2500,
             'depth': 32, 'platform_id': 8, 'filter_flags': 0x1102,
         }
-        return serializer.serialize_txd([tex])
+        from apps.methods.txd_splice import build_txd
+        return build_txd([tex], 0x1803FFFF, platform=8)
 
-    def _send_radar_tiles_to_txd_workshop(self): #vers 2
+    def _send_radar_tiles_to_txd_workshop(self): #vers 3
         """Pack every just-generated radarNN.png into its own real
         radarNN.txd, right alongside the PNGs (Aug 20 2026)"""
         paths = getattr(self, '_last_radar_tile_paths', None)
@@ -23510,20 +18847,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             QMessageBox.information(self, "Send to TXD Workshop",
                 "No radar tiles generated yet - left-click Radar first.")
             return
-        try:
-            from apps.methods.txd_serializer import TXDSerializer
-        except Exception as e:
-            QMessageBox.warning(self, "Send to TXD Workshop",
-                f"Required module not available: {e}")
-            return
-
-        serializer = TXDSerializer()
         packed = 0
         failed = 0
         txd_paths = []
         for png_path in paths:
             try:
-                txd_bytes = self._build_radar_tile_txd_bytes(png_path, serializer)
+                txd_bytes = self._build_radar_tile_txd_bytes(png_path)
                 name = os.path.splitext(os.path.basename(png_path))[0]
                 txd_path = os.path.join(os.path.dirname(png_path), name + '.txd')
                 with open(txd_path, 'wb') as f:
@@ -23534,7 +18863,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 failed += 1
                 print(f"[Radar->TXD] Failed to pack {png_path}: {e}")
 
-        # Real assists folder (Project Manager's own concept)
+        #  assists folder (Project Manager's own concept)
         assists_path = getattr(self.main_window, 'assists_path', None) if self.main_window else None
         copied = 0
         if assists_path and os.path.isdir(assists_path):
@@ -23554,7 +18883,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QMessageBox.information(self, "Send to TXD Workshop", msg +
             ("" if not failed else f"\n\n{failed} tile(s) failed - see console."))
 
-    def _export_radar_tiles_as_img(self): #vers 1
+    def _export_radar_tiles_as_img(self): #vers 2
         """Pack every just-generated radar tile into one real,
         combined RadarTex.img archive (Aug 20 2026)"""
         paths = getattr(self, '_last_radar_tile_paths', None)
@@ -23563,7 +18892,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 "No radar tiles generated yet - left-click Radar first.")
             return
         try:
-            from apps.methods.txd_serializer import TXDSerializer
             from apps.methods.img_core_classes import IMGFile, IMGVersion
         except Exception as e:
             QMessageBox.warning(self, "Export as RadarTex.img",
@@ -23579,7 +18907,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         est_mb = max(10, (len(paths) * 64) // 1024 + 5)
 
-        serializer = TXDSerializer()
         img = IMGFile()
         if not img.create_new(out_path, IMGVersion.VERSION_2, initial_size_mb=est_mb):
             QMessageBox.warning(self, "Export as RadarTex.img",
@@ -23596,7 +18923,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 # (radar0000.txd...radar1295.txd) - not the 2-digit
                 # convention a loose, individual .txd file uses.
                 name = f"radar{idx:04d}"
-                txd_bytes = self._build_radar_tile_txd_bytes(png_path, serializer, name=name)
+                txd_bytes = self._build_radar_tile_txd_bytes(png_path, name=name)
                 if img.add_entry(name + '.txd', txd_bytes, auto_save=False):
                     packed += 1
                 else:
@@ -23668,12 +18995,36 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             QMessageBox.information(self, "Send to Radar Workshop",
                 msg + f"\n\n{failed} tile(s) failed - see console.")
 
-    def _save_ipl_data_as_full(self, ipl_name): #vers 1
-        """Save ALL of an IPL's sections to a new file, not just inst
-        (Aug 16 2026)"""
+    def _save_ipl_data_as_full(self, ipl_name): #vers 2
+        """Save ALL of an IPL's sections to a new file, not just inst."""
+        built = self._build_ipl_text_lines(ipl_name)
+        if built is None:
+            return
+        lines_out, total_written, section_order = built
+        if not lines_out:
+            QMessageBox.information(self, "Save IPL Data As...",
+                f"No loaded data found for {ipl_name}.")
+            return
+        default_name = ipl_name if ipl_name.lower().endswith('.ipl') else ipl_name + '.ipl'
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save IPL Data As...", default_name, "IPL files (*.ipl);;All files (*)")
+        if not path:
+            return
+        try:
+            _write_ipl_lines(path, [l + '\n' for l in lines_out])
+        except Exception as e:
+            QMessageBox.warning(self, "Save IPL Data As...", f"Failed to save: {e}")
+            return
+        self._set_status(
+            f"Saved {total_written} entries across {len(section_order)} section(s) "
+            f"from {ipl_name} to {path}")
+
+    def _build_ipl_text_lines(self, ipl_name, target_game=None): #vers 3
+        """Text IPL lines for all sections; (lines, count, sections) or None.
+        target_game other than the loaded game writes inst only, in that game's layout."""
         loader = getattr(self, '_world_loader', None)
         if loader is None:
-            return
+            return None
         import re
         from apps.methods.gta_dat_parser import GTAGame
         stem = getattr(self, '_ipl_display_to_stem', {}).get(ipl_name)
@@ -23698,6 +19049,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         STRUCTURED = {'inst', 'cull', 'zone', 'path', 'grge', 'enex', 'occl', 'auzo'}
         game = getattr(loader, 'game', None)
+        if target_game and target_game != game:
+            game = target_game
+            section_order = ['inst']                # other sections differ per game
+        elif stem:
+            game = getattr(loader, 'ipl_layouts', {}).get(stem.lower(), game)   # SOL VC-format IPLs
         all_inst = getattr(self, '_all_instances', None) or []
 
         def _fmt(v):
@@ -23833,24 +19189,1070 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     total_written += 1
                 lines_out.append("end")
 
-        if not lines_out:
-            QMessageBox.information(self, "Save IPL Data As...",
-                f"No loaded data found for {ipl_name}.")
+        return lines_out, total_written, section_order
+
+    _GAME_LABELS = {'gta3': "GTA III", 'vc': "Vice City", 'sa': "San Andreas"}
+
+    def _write_ipl_as_game(self, ipl_name, target, path): #vers 1
+        """Write one IPL in another game's inst layout; returns (count, notes)."""
+        loader = self._world_loader
+        built = self._build_ipl_text_lines(ipl_name, target_game=target)
+        if not built or not built[0]:
+            raise ValueError(f"no loaded data for {ipl_name}")
+        lines, total, _order = built
+        notes = []
+        src_game = getattr(loader, 'game', None)
+        if target != src_game:
+            other = sorted({c for c, attr in (('cull', 'culls'), ('zone', 'zones'), ('path', 'paths'),
+                                              ('grge', 'grges'), ('enex', 'enexes'), ('occl', 'occls'),
+                                              ('auzo', 'auzos'))
+                            for o in getattr(loader, attr, []) or []
+                            if (o.get('source_ipl') if isinstance(o, dict) else o.source_ipl) == ipl_name})
+            if other:
+                notes.append("sections not converted: " + ", ".join(other))
+            insts = [i for i in loader.instances if i.source_ipl == ipl_name]
+            if target in ('sa', 'sol') and any((i.scale_x, i.scale_y, i.scale_z) != (1.0, 1.0, 1.0) for i in insts):
+                notes.append("scale dropped (SA inst has no scale)")
+            if src_game in ('sa', 'sol') and target not in ('sa', 'sol') and any(i.lod_index >= 0 for i in insts):
+                notes.append("LOD indices dropped")
+        _write_ipl_lines(path, [l + '\n' for l in lines])
+        return total, notes
+
+    def _save_ipl_as_game(self, ipl_name): #vers 1
+        """Save As an IPL converted to another game's format."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
             return
-        default_name = ipl_name if ipl_name.lower().endswith('.ipl') else ipl_name + '.ipl'
-        path, _filter = QFileDialog.getSaveFileName(
-            self, "Save IPL Data As...", default_name, "IPL files (*.ipl);;All files (*)")
+        keys = list(self._GAME_LABELS)
+        labels = [self._GAME_LABELS[k] for k in keys]
+        cur = getattr(loader, 'game', 'sa')
+        pick, ok = QInputDialog.getItem(self, "Convert IPL", f"{ipl_name}: save in which game's format?",
+                                        labels, keys.index(cur) if cur in keys else 0, False)
+        if not ok:
+            return
+        target = keys[labels.index(pick)]
+        default = os.path.splitext(ipl_name)[0] + f"_{target}.ipl"
+        path, _f = QFileDialog.getSaveFileName(self, "Convert IPL", default, "IPL files (*.ipl);;All files (*)")
         if not path:
             return
         try:
-            with open(path, 'w', encoding='ascii', errors='replace') as f:
-                f.write('\n'.join(lines_out) + '\n')
+            total, notes = self._write_ipl_as_game(ipl_name, target, path)
         except Exception as e:
-            QMessageBox.warning(self, "Save IPL Data As...", f"Failed to save: {e}")
+            QMessageBox.warning(self, "Convert IPL", f"Failed: {e}")
             return
-        self._set_status(
-            f"Saved {total_written} entries across {len(section_order)} section(s) "
-            f"from {ipl_name} to {path}")
+        msg = f"Wrote {total} instance(s) as {pick} to {os.path.basename(path)}"
+        if notes:
+            QMessageBox.information(self, "Convert IPL", msg + "\n\n" + "\n".join(notes))
+        self._set_status(msg)
+
+    def _rebase_ipls_dialog(self, names): #vers 1
+        """Shift + rotate several IPLs together, optionally writing converted copies."""
+        loader = getattr(self, '_world_loader', None)
+        names = [n for n in names if n]
+        if loader is None or not names:
+            return
+        insts = [i for i in loader.instances if i.source_ipl in set(names)]
+        cx = sum(i.pos_x for i in insts) / len(insts) if insts else 0.0
+        cy = sum(i.pos_y for i in insts) / len(insts) if insts else 0.0
+        from PyQt6.QtWidgets import QFormLayout, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Rebase {len(names)} IPL(s)")
+        form = QFormLayout(dlg)
+        spins = {}
+        for key, label, val, rng in (('dx', "Shift X:", 0.0, 100000), ('dy', "Shift Y:", 0.0, 100000),
+                                     ('dz', "Shift Z:", 0.0, 10000), ('ang', "Rotate (deg, Z):", 0.0, 360),
+                                     ('px', "Pivot X:", cx, 100000), ('py', "Pivot Y:", cy, 100000)):
+            sp = QDoubleSpinBox()
+            sp.setRange(-rng, rng)
+            sp.setDecimals(3)
+            sp.setValue(val)
+            form.addRow(label, sp)
+            spins[key] = sp
+        fmt = QComboBox()
+        fmt.addItem("Don't export (edit in place)", None)
+        for k, v in self._GAME_LABELS.items():
+            fmt.addItem(f"Export copies as {v}", k)
+        form.addRow("After rebase:", fmt)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        v = {k: sp.value() for k, sp in spins.items()}
+        for n in names:
+            if v['ang']:
+                self._rotate_ipl_coordinates(n, v['px'], v['py'], v['ang'])
+            if v['dx'] or v['dy'] or v['dz']:
+                self._shift_ipl_coordinates(n, v['dx'], v['dy'], v['dz'])
+        target = fmt.currentData()
+        if target is None:
+            self._set_status(f"Rebased {len(names)} IPL(s) - Ctrl+S to save")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Folder for converted IPLs")
+        if not folder:
+            return
+        notes, done = [], 0
+        for n in names:
+            try:
+                out = os.path.join(folder, os.path.splitext(n)[0] + ".ipl")
+                _t, nn = self._write_ipl_as_game(n, target, out)
+                done += 1
+                notes += [f"{n}: {x}" for x in nn]
+            except Exception as e:
+                notes.append(f"{n}: failed - {e}")
+        QMessageBox.information(self, "Rebase", f"Exported {done} of {len(names)} IPL(s) to {folder}"
+                                + ("\n\n" + "\n".join(notes[:30]) if notes else ""))
+
+    def _binary_stream_source(self, ipl_name): #vers 1
+        """(archive_path, entry_name) if ipl_name is a loaded IMG binary stream."""
+        for streams in getattr(self, '_ipl_names_with_binary_stream', {}).values():
+            for archive_path, entry_name in streams:
+                if entry_name == ipl_name:
+                    return archive_path, entry_name
+        return None
+
+    # -- change tracking, save all, save points (Sep 23 2026)
+    def _init_change_tracking(self): #vers 2
+        """Start the changed-IPL poll and the save point timer."""
+        self._ipl_baseline = {}          # ipl name -> signature at load / last save
+        self._inst_baseline = {}         # id(inst) -> state tuple at load / last save
+        self._baseline_loader_id = None
+        self._dirty_ipls = set()
+        self._ide_pending = {}           # model_id -> (IDEObject, file path, edited raw line)
+        self._last_savepoint_sig = None
+        self._dirty_timer = QTimer(self)
+        self._dirty_timer.timeout.connect(self._refresh_dirty_ipls)
+        self._dirty_timer.start(1500)
+        self._savepoint_timer = QTimer(self)
+        self._savepoint_timer.timeout.connect(self._auto_savepoint)
+        self._apply_savepoint_settings()
+
+    def _apply_savepoint_settings(self): #vers 1
+        """Start or stop automatic save points from map settings."""
+        mins = max(1, int(self.map_settings.get('savepoints_interval_min') or 10))
+        if self.map_settings.get('savepoints_enabled'):
+            self._savepoint_timer.start(mins * 60000)
+        else:
+            self._savepoint_timer.stop()
+
+    def _refresh_dirty_ipls(self): #vers 3
+        """Compare each loaded IPL with its baseline; update highlights."""
+        if not hasattr(self, '_ipl_baseline'):
+            return
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            if self._dirty_ipls:
+                self._dirty_ipls = set()
+                self._apply_dirty_highlight()
+            return
+        from apps.components.Map_Editor.depends.map_changes import ipl_signatures, _inst_key
+        if id(loader) != self._baseline_loader_id:
+            self._baseline_loader_id = id(loader)
+            self._ipl_baseline, self._inst_baseline = {}, {}
+            self._ide_pending = {}
+            self._map_checks_dlg = None
+            self._session_saved_ipls, self._session_saved_ides = set(), set()
+        sigs = ipl_signatures(loader)
+        new = {n for n in sigs if n not in self._ipl_baseline}
+        if new:
+            for n in new:
+                self._ipl_baseline[n] = sigs[n]
+            src = self.__dict__.setdefault('_inst_baseline_src', {})
+            for i in loader.instances:
+                if i.source_ipl in new:
+                    self._inst_baseline[id(i)] = _inst_key(i)
+                    src[id(i)] = i.source_ipl
+        empty = hash(())
+        dirty = {n for n, b in self._ipl_baseline.items() if sigs.get(n, empty) != b}
+        if dirty != self._dirty_ipls:
+            self._dirty_ipls = dirty
+            self._apply_dirty_highlight()
+
+    def _inst_changed(self, inst): #vers 1
+        """True if this instance was moved, edited or added since last save."""
+        if inst.source_ipl not in getattr(self, '_dirty_ipls', ()):
+            return False
+        from apps.components.Map_Editor.depends.map_changes import _inst_key
+        b = self._inst_baseline.get(id(inst))
+        return b is None or b != _inst_key(inst)
+
+    def _apply_dirty_highlight(self): #vers 2
+        """Bold orange rows for changed IPLs and instances; status count."""
+        dirty = getattr(self, '_dirty_ipls', set())
+        table = getattr(self, '_ipl_sections_table', None)
+        if table is not None:
+            orange = QBrush(QColor(230, 140, 30))
+            for r in range(table.rowCount()):
+                first = table.item(r, 0)
+                name = first.data(Qt.ItemDataRole.UserRole) if first is not None else None
+                on = name in dirty
+                for c in range(table.columnCount()):
+                    cell = table.item(r, c)
+                    if cell is None:
+                        continue
+                    f = cell.font()
+                    f.setBold(on)
+                    cell.setFont(f)
+                    cell.setData(Qt.ItemDataRole.ForegroundRole, orange if on else None)
+        view = getattr(self, '_instance_table', None)
+        model = view.model() if view is not None else None
+        if model is not None and model.rowCount() and model.columnCount():
+            model.dataChanged.emit(model.index(0, 0),
+                                   model.index(model.rowCount() - 1, model.columnCount() - 1))
+        pend = getattr(self, '_ide_pending', {})
+        if dirty or pend:
+            self._set_status(f"Unsaved: {len(dirty)} IPL(s), {len(pend)} IDE object(s) - Ctrl+S to save")
+
+    def _mark_ipl_saved(self, ipl_name): #vers 2
+        """Reset the baseline for one IPL after a successful save."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None or not hasattr(self, '_ipl_baseline'):
+            return
+        from apps.components.Map_Editor.depends.map_changes import ipl_signatures, _inst_key
+        self._ipl_baseline[ipl_name] = ipl_signatures(loader).get(ipl_name, hash(()))
+        self.__dict__.setdefault('_session_saved_ipls', set()).add(ipl_name)
+        for i in loader.instances:
+            if i.source_ipl == ipl_name:
+                self._inst_baseline[id(i)] = _inst_key(i)
+        self._refresh_dirty_ipls()
+
+    def _forget_ipl_baseline(self, names): #vers 1
+        """Stop tracking IPLs that are being unloaded."""
+        for n in names:
+            getattr(self, '_ipl_baseline', {}).pop(n, None)
+            getattr(self, '_dirty_ipls', set()).discard(n)
+
+    def _confirm_discard_ipls(self, names, action, include_ide=False): #vers 2
+        """Ask before dropping unsaved edits in these IPLs; True to go ahead."""
+        self._refresh_dirty_ipls()
+        hit = sorted(set(names) & getattr(self, '_dirty_ipls', set()))
+        ides = list(getattr(self, '_ide_pending', {}).values()) if include_ide else []
+        if not hit and not ides:
+            return True
+        lines = hit[:20] + (["..."] if len(hit) > 20 else [])
+        if ides:
+            lines.append(f"{len(ides)} edited IDE object(s)")
+        r = QMessageBox.question(
+            self, action, "Unsaved changes:\n\n" + "\n".join(lines) + "\n\nSave them first?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel)
+        if r == QMessageBox.StandardButton.Cancel:
+            return False
+        if r == QMessageBox.StandardButton.Save:
+            ok = all([self._save_ipl_in_place(n, confirm=False) for n in hit])
+            return (self._save_pending_ide(ides) if ides else True) and ok
+        return True
+
+    def confirm_close(self, action="Map Workshop"): #vers 2
+        """Unsaved-work reminder for close, quit or world reload; True to continue."""
+        return self._confirm_discard_ipls(list(getattr(self, '_dirty_ipls', set())) or
+                                          list(getattr(self, '_ipl_baseline', {})), action,
+                                          include_ide=True)
+
+    def _save_all_ipls(self): #vers 3
+        """Save every changed IPL back to its own original file."""
+        self._refresh_dirty_ipls()
+        names = sorted(self._dirty_ipls)
+        ides = list(self._ide_pending.values())
+        if not names and not ides:
+            self._set_status("No unsaved map changes")
+            return True
+        if QMessageBox.question(
+                self, "Save Map Changes",
+                f"Save {len(names)} changed IPL(s) and {len(ides)} edited IDE object(s) "
+                f"back to their original files?\n\n"
+                + "\n".join(names[:20]) + ("\n..." if len(names) > 20 else "")
+                + "\n\nBackups are made first.") != QMessageBox.StandardButton.Yes:
+            return False
+        from apps.components.Map_Editor.depends.map_checks import check_lod_links
+        loader = self._world_loader
+        broken = [r for r in check_lod_links(loader.instances, self._lod_parent_ipl)
+                  if 'warning' not in r[1] and r[0].source_ipl in names]
+        if broken and QMessageBox.question(
+                self, "Save Map Changes",
+                f"{len(broken)} broken LOD link(s) in the IPLs being saved "
+                f"(see Map Checks).\n\nSave anyway?") != QMessageBox.StandardButton.Yes:
+            self._show_map_checks()
+            return False
+        failed = [n for n in names if not self._save_ipl_in_place(n, confirm=False)]
+        if ides and not self._save_pending_ide(ides):
+            failed.append("IDE edits")
+        if failed:
+            QMessageBox.warning(self, "Save Map Changes",
+                                f"{len(names) - len(failed)} saved, {len(failed)} not saved:\n\n"
+                                + "\n".join(failed))
+        else:
+            self._set_status(f"Saved {len(names)} IPL(s)")
+        return not failed
+
+    def _popup_under(self, btn, items): #vers 1
+        """Show a menu of (label, callback) under a title bar button; None = separator."""
+        menu = QMenu(self)
+        for it in items:
+            if it is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(it[0], it[1])
+        menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+
+    def _map_open_menu(self): #vers 1
+        """Open: game .dat, game folder or a model."""
+        self._popup_under(self.open_btn, [
+            ("Load Game DAT...", lambda: self._load_game_dat_file()),
+            ("Load Game Folder...", lambda: self._load_game_folder()),
+            None,
+            ("Open Model / COL / TXD...", self._open_file)])
+
+    def _map_import_menu(self): #vers 1
+        """Import: IPL / IDE into the loaded world, or a model."""
+        self._popup_under(self.tb_import_btn, [
+            ("Import IPL...", self._import_ipl_files),
+            ("Import IDE...", self._import_ide_files),
+            None,
+            ("Import Model...", self._import_model)])
+
+    def _map_export_menu(self): #vers 1
+        """Export: selected IPL, changed IPLs to a folder, or the model."""
+        self._popup_under(self.export_ojs_btn, [
+            ("Export Selected IPL...", self._export_selected_ipl),
+            ("Export Changed IPLs to Folder...", self._export_changed_ipls),
+            None,
+            ("Export Model...", self._export_model_menu)])
+
+    def _map_loader_or_warn(self, title): #vers 1
+        """Loaded world loader, or None after telling the user to load one."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            QMessageBox.information(self, title, "Load a game (.dat or folder) first.")
+        return loader
+
+    def _import_ipl_files(self): #vers 1
+        """Add text IPL files to the loaded world and show them."""
+        from apps.methods.gta_dat_parser import DATEntry
+        loader = self._map_loader_or_warn("Import IPL")
+        if loader is None:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import IPL", getattr(self, '_game_root', '') or '',
+                                                "IPL files (*.ipl);;All files (*)")
+        if not paths:
+            return
+        names = []
+        for path in paths:
+            stem = os.path.splitext(os.path.basename(path))[0].lower()
+            if stem in loader.available_ipls:
+                self._set_status(f"{os.path.basename(path)}: an IPL with that name is already in the world")
+                continue
+            loader.available_ipls[stem] = DATEntry('IPL', path, abs_path=path, exists=True, source_dat='import')
+            name = os.path.basename(path)
+            self._ipl_display_to_stem[name] = stem
+            self._hidden_ipls.add(name)
+            self._ipl_display_order.append(name)
+            names.append(name)
+        if not names:
+            return
+        self._rebuild_ipl_sections_rows()
+        rows = [self._ipl_display_order.index(n) for n in names]
+        self._load_selected_ipl_sections(rows)
+        self._set_status(f"Imported {len(names)} IPL(s)")
+
+    def _import_ide_files(self): #vers 1
+        """Add IDE object definitions to the loaded world."""
+        from apps.methods.gta_dat_parser import DATEntry
+        loader = self._map_loader_or_warn("Import IDE")
+        if loader is None:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import IDE", getattr(self, '_game_root', '') or '',
+                                                "IDE files (*.ide);;All files (*)")
+        if not paths:
+            return
+        before = len(loader.objects)
+        for path in paths:
+            loader._load_ide(DATEntry('IDE', path, abs_path=path, exists=True, source_dat='import'), 'import')
+        self._populate_object_browser(loader)
+        self._set_status(f"Imported {len(paths)} IDE(s): {len(loader.objects) - before} new object id(s)")
+
+    def _export_selected_ipl(self): #vers 1
+        """Save the IPL selected in IPL Sections (all sections) to a new file."""
+        table = getattr(self, '_ipl_sections_table', None)
+        row = table.currentRow() if table is not None else -1
+        item = table.item(row, 0) if row >= 0 else None
+        if item is None:
+            QMessageBox.information(self, "Export IPL", "Select an IPL in IPL Sections first.")
+            return
+        self._save_ipl_data_as_full(item.data(Qt.ItemDataRole.UserRole))
+
+    def _export_changed_ipls(self): #vers 1
+        """Write every changed IPL (all sections) into a chosen folder; originals untouched."""
+        if self._map_loader_or_warn("Export Changed IPLs") is None:
+            return
+        self._refresh_dirty_ipls()
+        names = sorted(getattr(self, '_dirty_ipls', set()))
+        if not names:
+            self._set_status("No changed IPLs to export")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Export Changed IPLs to Folder")
+        if not folder:
+            return
+        done, failed = 0, []
+        for name in names:
+            built = self._build_ipl_text_lines(name)
+            if not built or not built[0]:
+                failed.append(name)
+                continue
+            _write_ipl_lines(os.path.join(folder, os.path.splitext(name)[0] + ".ipl"),
+                             [l + '\n' for l in built[0]])
+            done += 1
+        msg = f"Exported {done} changed IPL(s) to {folder}"
+        if failed:
+            QMessageBox.warning(self, "Export Changed IPLs", msg + "\n\nNot exported: " + ", ".join(failed))
+        self._set_status(msg)
+
+    def _save_map_or_model(self): #vers 2
+        """Ctrl+S / Save: changed IPLs first, otherwise the open model."""
+        self._refresh_dirty_ipls()
+        if getattr(self, '_dirty_ipls', None) or getattr(self, '_ide_pending', None):
+            self._save_all_ipls()
+        else:
+            self._save_file()
+
+    def _apply_instance_fields(self, inst, values): #vers 1
+        """Set IPL instance fields from the object editor (undoable)."""
+        old = {k: getattr(inst, k) for k in values}
+        if old == values:
+            return
+        model_changed = old.get('model_id') != values.get('model_id') or \
+            old.get('model_name') != values.get('model_name')
+
+        def _set(v):
+            for k, x in v.items():
+                setattr(inst, k, x)
+            if model_changed:
+                self._apply_ipl_visibility_filter(auto_fit=False)
+            else:
+                self._on_instance_edited(inst)
+
+        _set(values)
+        self._push_map_undo(lambda: _set(old), lambda: _set(values),
+                            f"Edit {inst.model_name} IPL line")
+
+    def _ide_raw_line(self, obj): #vers 1
+        """Current IDE line text for obj: pending edit, else the file line; None if not found."""
+        pend = self._ide_pending.get(obj.model_id)
+        if pend is not None:
+            return pend[2]
+        p = self._ide_abs_path(obj)
+        if p is None:
+            return None
+        with open(p, 'rb') as f:
+            lines = f.read().decode('latin-1').splitlines()
+        return lines[obj.line_no - 1] if 0 < obj.line_no <= len(lines) else None
+
+    def _parse_ide_raw(self, obj, text): #vers 1
+        """Parse one edited IDE line in obj's section; returns the new IDEObject or None."""
+        from apps.methods.gta_dat_parser import IDEParser
+        parser = IDEParser(getattr(self._world_loader, 'game', 'sa'))
+        body = text.split('#')[0].strip()
+        return parser._parse_line(obj.section, body, obj.source_ide, obj.line_no) if body else None
+
+    def _check_ide_raw(self, obj, text): #vers 1
+        """Error text if the edited line doesn't parse or changes the model ID, else ''."""
+        new = self._parse_ide_raw(obj, text)
+        if new is None:
+            return f"doesn't parse as a '{obj.section}' line"
+        if new.model_id != obj.model_id:
+            return "the model ID can't be changed here"
+        return ''
+
+    def _apply_ide_raw(self, obj, text): #vers 1
+        """Replace obj's IDE line (any section) - fields updated, written on Ctrl+S; undoable."""
+        new = self._parse_ide_raw(obj, text)
+        path = self._ide_abs_path(obj) if obj.model_id not in self._ide_pending else self._ide_pending[obj.model_id][1]
+        old_fields = (obj.model_name, obj.txd_name, dict(obj.extra))
+        old_pend = self._ide_pending.get(obj.model_id)
+        new_fields = (new.model_name, new.txd_name, dict(new.extra))
+
+        def _set(fields, pend):
+            obj.model_name, obj.txd_name = fields[0], fields[1]
+            obj.extra.clear()
+            obj.extra.update(fields[2])
+            if pend is None:
+                self._ide_pending.pop(obj.model_id, None)
+            else:
+                self._ide_pending[obj.model_id] = pend
+            self._refresh_dirty_ipls()
+            self._apply_dirty_highlight()
+
+        _set(new_fields, (obj, path, text))
+        self._push_map_undo(lambda: _set(old_fields, old_pend),
+                            lambda: _set(new_fields, (obj, path, text)), f"Edit IDE {obj.model_name}")
+
+    def _ide_abs_path(self, obj): #vers 1
+        """Full path of an IDE object's source file (matched by name and line ID)."""
+        loader = getattr(self, '_world_loader', None)
+        cands = [p for _ph, et, p, ok in getattr(loader, 'load_log', []) or []
+                 if et == "IDE" and ok and os.path.basename(p) == obj.source_ide]
+        for p in cands:
+            try:
+                with open(p, 'rb') as f:
+                    lines = f.read().decode('latin-1').splitlines()
+                if 0 < obj.line_no <= len(lines) and \
+                        lines[obj.line_no - 1].split(',')[0].strip() == str(obj.model_id):
+                    return p
+            except OSError:
+                continue
+        return None
+
+    def _save_pending_ide(self, entries): #vers 3
+        """Write pending (obj, path, raw line) IDE edits; True if all written."""
+        from apps.components.Map_Editor.depends.map_changes import write_ide_raw_lines
+        by_file, missing = {}, []
+        for obj, path, raw in entries:
+            if path is None:
+                missing.append(f"{obj.model_name} ({obj.source_ide})")
+            else:
+                by_file.setdefault(path, []).append((obj.line_no, obj.model_id, raw))
+        errors = []
+        for p, rows in by_file.items():
+            try:
+                write_ide_raw_lines(p, rows)
+                self.__dict__.setdefault('_session_saved_ides', set()).add(p)
+                for _ln, mid, _raw in rows:
+                    self._ide_pending.pop(mid, None)
+            except Exception as e:
+                errors.append(f"{os.path.basename(p)}: {e}")
+        if missing or errors:
+            QMessageBox.warning(self, "Save IDE", "Not saved:\n\n" + "\n".join(missing + errors))
+        self._refresh_dirty_ipls()
+        self._apply_dirty_highlight()
+        return not missing and not errors
+
+    def _show_script_placements(self): #vers 1
+        """Scan main.scm for script-placed objects, pickups and car generators."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            QMessageBox.information(self, "Script Placements", "Load a world first.")
+            return
+        root = getattr(self, '_game_root', '') or ''
+        path = os.path.join(root, 'data', 'main.scm')
+        if not os.path.isfile(path):
+            path, _f = QFileDialog.getOpenFileName(self, "Open main.scm", root, "SCM (*.scm);;All files (*)")
+            if not path:
+                return
+        from apps.methods.scm_placements import scan_placements
+        from apps.components.Map_Editor.depends.map_integration import ScriptPlacementsDialog
+        with open(path, 'rb') as f:
+            data = f.read()
+        self._set_status(f"Scanning {os.path.basename(path)}...")
+        QApplication.processEvents()
+        hits = scan_placements(data, getattr(loader, 'game', 'sa'))
+        dlg = ScriptPlacementsDialog(self, path, hits)
+        dlg.show()
+        self._script_dlg = dlg
+        self._set_status(f"{len(hits)} script placement(s) in {os.path.basename(path)}")
+
+    def _show_engine_load_log(self): #vers 1
+        """Replay the loaded world's DAT / IDE / IPL / stream load order as a log."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            QMessageBox.information(self, "Engine Load Log", "Load a world first.")
+            return
+        from apps.components.Map_Editor.depends.map_integration import build_load_log, EngineLoadLogDialog
+        streams = {p: [en for _a, en in lst] for p, lst in getattr(self, '_ipl_names_with_binary_stream', {}).items()}
+        dlg = EngineLoadLogDialog(self, build_load_log(loader, self._lod_parent_ipl, streams))
+        dlg.show()
+        self._load_log_dlg = dlg
+
+    def _regen_changed_radar_tiles(self): #vers 1
+        """Re-render only radar tiles covering old or new positions of unsaved edits."""
+        loader = getattr(self, '_world_loader', None)
+        self._refresh_dirty_ipls()
+        dirty = getattr(self, '_dirty_ipls', set())
+        if loader is None or not dirty:
+            self._set_status("No unsaved edits - nothing to regenerate")
+            return
+        out = self.map_settings.get('radar_tiles_output_dir')
+        if not out:
+            self._on_generate_radar_tiles_clicked()
+            return
+        from apps.methods.gta_dat_parser import compute_radar_grid, RADAR_GRID_PRESETS
+        from apps.components.Map_Editor.depends.map_integration import tiles_touching
+        pts = [(i.pos_x, i.pos_y) for i in loader.instances if i.source_ipl in dirty]
+        src = getattr(self, '_inst_baseline_src', {})
+        pts += [(k[3], k[4]) for key, k in self._inst_baseline.items() if src.get(key) in dirty]
+        preset = RADAR_GRID_PRESETS.get(getattr(loader, 'game', 'sa'), RADAR_GRID_PRESETS['sa'])
+        idx = tiles_touching(compute_radar_grid(**preset), pts)
+        if not idx:
+            self._set_status("Edits are outside the radar grid")
+            return
+        self._generate_radar_tiles(out, only=idx)
+
+    def _show_map_diff(self): #vers 1
+        """Changed / added / removed objects per IPL vs last save or a save point."""
+        if getattr(self, '_world_loader', None) is None:
+            return
+        from apps.components.Map_Editor.depends.map_workflow import MapDiffDialog
+        dlg = MapDiffDialog(self)
+        dlg.show()
+        self._diff_dlg = dlg
+
+    def _export_mod_package(self): #vers 2
+        """Changed and saved-this-session IPL / IDE files, as game-relative copies + readme + zip."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            return
+        import time
+        from apps.methods.gta_dat_parser import write_binary_ipl_inst_only, detect_ipl_format
+        from apps.components.Map_Editor.depends.map_changes import apply_ide_raw_lines
+        from apps.components.Map_Editor.depends.map_workflow import export_mod_package, package_name
+        self._refresh_dirty_ipls()
+        ipls = sorted(set(self._dirty_ipls) | getattr(self, '_session_saved_ipls', set()))
+        root = getattr(self, '_game_root', '') or ''
+        files, notes = {}, []
+
+        def rel(p):
+            try:
+                return os.path.relpath(p, root) if root else os.path.basename(p)
+            except ValueError:
+                return os.path.basename(p)
+
+        for n in ipls:
+            insts = [i for i in loader.instances if i.source_ipl == n]
+            src = self._binary_stream_source(n)
+            if src is not None:
+                files[os.path.join('img', os.path.basename(src[0]), n)] = write_binary_ipl_inst_only(insts)
+                notes.append(f"img/{os.path.basename(src[0])}/{n}: import into {os.path.basename(src[0])}")
+                continue
+            stem = self._ipl_display_to_stem.get(n)
+            entry = loader.available_ipls.get(stem) if stem else None
+            if entry is None or not entry.exists:
+                notes.append(f"{n}: no source file, skipped")
+                continue
+            with open(entry.abs_path, 'rb') as f:
+                head = f.read(64)
+            if detect_ipl_format(head) == 'binary':
+                files[rel(entry.abs_path)] = write_binary_ipl_inst_only(insts)
+            else:
+                built = self._build_ipl_text_lines(n)
+                files[rel(entry.abs_path)] = ('\r\n'.join(built[0]) + '\r\n').encode('latin-1', 'replace')
+        ide_files = set(getattr(self, '_session_saved_ides', set()))
+        pend_by = {}
+        for o, p, raw in self._ide_pending.values():
+            if p:
+                ide_files.add(p)
+                pend_by.setdefault(p, []).append((o.line_no, o.model_id, raw))
+        for p in sorted(ide_files):
+            files[rel(p)] = apply_ide_raw_lines(p, pend_by.get(p, []))
+        if not files:
+            QMessageBox.information(self, "Export Mod Package", "No changed or saved map files this session.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Folder for the mod package")
+        if not folder:
+            return
+        game = getattr(loader, 'game', 'game')
+        readme = [f"Map mod package - {self._GAME_LABELS.get(game, game)}",
+                  f"Created {time.strftime('%Y-%m-%d %H:%M')} with IMG Factory 1.6 Map Workshop", "",
+                  "Copy the folders over your game folder (back it up first).",
+                  "Files under img/<archive>/ go inside that IMG archive - import them with IMG Factory.", "",
+                  "Files:"] + [f"  {k}" for k in sorted(files)] + ([""] + notes if notes else [])
+        try:
+            out = export_mod_package(folder, package_name(game), files, readme)
+        except OSError as e:
+            QMessageBox.warning(self, "Export Mod Package", f"Failed: {e}")
+            return
+        QMessageBox.information(self, "Export Mod Package", f"{len(files)} file(s) written to\n{out}\n(and {out}.zip)")
+
+    def _world_key(self): #vers 1
+        return os.path.abspath(getattr(self, '_loaded_dat_path', '') or getattr(self, '_game_root', '') or 'world')
+
+    def _save_camera_bookmark(self, slot): #vers 1
+        """Ctrl+Shift+1..9: store the camera in a slot for this world."""
+        vp = getattr(self, 'preview_widget', None)
+        if vp is None:
+            return
+        allb = dict(self.map_settings.get('camera_bookmarks') or {})
+        mine = dict(allb.get(self._world_key(), {}))
+        old = mine.get(str(slot))
+        name = old[5] if old else f"Bookmark {slot}"
+        mine[str(slot)] = [vp._pan_x, vp._pan_y, vp._dist, vp._yaw, vp._pitch, name]
+        allb[self._world_key()] = mine
+        self.map_settings.set('camera_bookmarks', allb)
+        self._set_status(f"Camera saved to slot {slot} (Ctrl+{slot} to return)")
+
+    def _goto_camera_bookmark(self, slot): #vers 1
+        """Ctrl+1..9: jump the camera to a saved slot."""
+        vp = getattr(self, 'preview_widget', None)
+        b = (self.map_settings.get('camera_bookmarks') or {}).get(self._world_key(), {}).get(str(slot))
+        if vp is None or not b:
+            self._set_status(f"No camera bookmark in slot {slot} (Ctrl+Shift+{slot} saves one)")
+            return
+        vp._pan_x, vp._pan_y, vp._dist, vp._yaw, vp._pitch = b[:5]
+        if getattr(vp, '_projection', '') == 'ortho':
+            vp.makeCurrent(); vp.resizeGL(vp.width(), vp.height())
+        vp.update()
+        self._set_status(f"Camera: {b[5]}")
+
+    def _camera_bookmarks_menu(self, parent_menu): #vers 1
+        """Submenu listing slots with go / rename / delete."""
+        m = parent_menu.addMenu("Camera Bookmarks")
+        mine = (self.map_settings.get('camera_bookmarks') or {}).get(self._world_key(), {})
+        for slot in range(1, 10):
+            b = mine.get(str(slot))
+            sub = m.addMenu(f"{slot}: {b[5] if b else '(empty)'}")
+            sub.addAction("Go (Ctrl+%d)" % slot, lambda s=slot: self._goto_camera_bookmark(s)).setEnabled(bool(b))
+            sub.addAction("Save current view here (Ctrl+Shift+%d)" % slot, lambda s=slot: self._save_camera_bookmark(s))
+            sub.addAction("Rename...", lambda s=slot: self._rename_camera_bookmark(s)).setEnabled(bool(b))
+            sub.addAction("Delete", lambda s=slot: self._delete_camera_bookmark(s)).setEnabled(bool(b))
+        return m
+
+    def _rename_camera_bookmark(self, slot): #vers 1
+        allb = dict(self.map_settings.get('camera_bookmarks') or {})
+        mine = dict(allb.get(self._world_key(), {}))
+        b = mine.get(str(slot))
+        if not b:
+            return
+        name, ok = QInputDialog.getText(self, "Camera Bookmark", "Name:", text=b[5])
+        if ok and name.strip():
+            mine[str(slot)] = b[:5] + [name.strip()]
+            allb[self._world_key()] = mine
+            self.map_settings.set('camera_bookmarks', allb)
+
+    def _delete_camera_bookmark(self, slot): #vers 1
+        allb = dict(self.map_settings.get('camera_bookmarks') or {})
+        mine = dict(allb.get(self._world_key(), {}))
+        mine.pop(str(slot), None)
+        allb[self._world_key()] = mine
+        self.map_settings.set('camera_bookmarks', allb)
+
+    def _apply_gamepad_setting(self): #vers 1
+        """Start or stop the game controller from map settings."""
+        vp = getattr(self, 'preview_widget', None)
+        pad = getattr(self, '_gamepad', None)
+        want = bool(self.map_settings.get('gamepad_enabled'))
+        if not want or vp is None or not hasattr(vp, 'set_gamepad'):
+            if pad is not None:
+                pad.stop()
+                vp.set_gamepad(None)
+                self._gamepad = None
+            return
+        if pad is None:
+            from apps.methods.gamepad_input import GamepadPoller
+            pad = GamepadPoller(self, deadzone=float(self.map_settings.get('gamepad_deadzone') or 0.15))
+            pad.connected.connect(lambda n: self._set_status(
+                f"Controller connected: {n}" if n else "Controller disconnected"))
+            try:
+                pad.start()
+            except ImportError:
+                QMessageBox.warning(self, "Game Controller",
+                                    "Controller support needs pygame 2:\n\npip install pygame")
+                self.map_settings.set('gamepad_enabled', False)
+                return
+            self._gamepad = pad
+            vp.set_gamepad(pad)
+        pad.deadzone = float(self.map_settings.get('gamepad_deadzone') or 0.15)
+
+    def _on_pad_snap_toggled(self, on): #vers 1
+        """Options button toggled edge snap: keep the ribbon button in step."""
+        act = getattr(self, '_snap_edge_act', None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(on)
+            act.blockSignals(False)
+        self._set_status(f"Edge snap {'on' if on else 'off'}")
+
+    def _write_img_entry(self, img_path, name, data): #vers 1
+        """Replace one IMG entry (archive backed up by the IMG writer); raises on failure."""
+        cache = getattr(self, '_model_cache', None)
+        img = cache._opened_img_files.get(img_path) if cache is not None else None
+        if img is None:
+            from apps.methods.img_core_classes import IMGFile
+            img = IMGFile(img_path)
+            if not img.open():
+                raise IOError(f"couldn't open {img_path}")
+        if not img.add_entry(name, data):
+            raise IOError(getattr(img, 'last_error', '') or f"{os.path.basename(img_path)} refused {name}")
+        if cache is not None:
+            cache._geometry_cache.pop(os.path.splitext(name)[0].lower(), None)
+
+    def _bake_prelight_selected(self): #vers 1
+        """Bake ambient + sun into the prelit colours of the selected objects' DFFs (undoable)."""
+        insts = self._selected_instances()
+        cache = getattr(self, '_model_cache', None)
+        if not insts or cache is None:
+            self._set_status("Bake prelight: select objects in a loaded world first")
+            return
+        from apps.components.Map_Editor.depends.map_prelight import PrelightDialog, bake_prelight, light_vector
+        from apps.methods.dff_parser import DFFParser, detect_dff
+        from apps.methods.dff_patch import patch_dff
+        dlg = PrelightDialog(self, self.map_settings)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        amb, dif, az, el, strength = dlg.values()
+        sun = light_vector(az, el)
+        vp = self.preview_widget
+        firsts = {}
+        for i in insts:
+            firsts.setdefault(i.model_name.lower(), i)
+        writes, notes = [], []
+        for key, inst in firsts.items():
+            hit = None
+            for img_path, entry in cache._dff_index.get(key, []):
+                data = cache._read_entry(img_path, entry)
+                if data and detect_dff(data):
+                    hit = (img_path, entry, data)
+                    break
+            if hit is None:
+                notes.append(f"{key}: DFF not found in loaded IMGs")
+                continue
+            img_path, entry, data = hit
+            model = DFFParser(data, key).parse()
+            eff = self._effective_rotation(inst)
+            lm = vp._quat_rotate((-eff[0], -eff[1], -eff[2], eff[3]), sun)     # world sun -> model space
+            if not bake_prelight(model, lm, amb, dif, strength):
+                notes.append(f"{key}: no prelit colours to bake into")
+                continue
+            try:
+                new, _rep = patch_dff(data, model)
+            except Exception as e:
+                notes.append(f"{key}: {e}")
+                continue
+            if new == data:
+                notes.append(f"{key}: unchanged")
+                continue
+            writes.append((img_path, entry.name, data, new))
+
+        def _apply(k):
+            for img_path, name, old, new in writes:
+                self._write_img_entry(img_path, name, (old, new)[k])
+            self._apply_ipl_visibility_filter(auto_fit=False)
+
+        if writes:
+            try:
+                _apply(1)
+            except Exception as e:
+                QMessageBox.warning(self, "Bake Prelight", f"Write failed: {e}")
+                return
+            self._push_map_undo(lambda: _apply(0), lambda: _apply(1), f"Bake prelight ({len(writes)} DFF)")
+        msg = f"Baked prelight into {len(writes)} DFF(s)"
+        if notes:
+            QMessageBox.information(self, "Bake Prelight", msg + "\n\n" + "\n".join(notes[:30]))
+        self._set_status(msg)
+
+    def _show_map_checks(self): #vers 1
+        """LOD links, IDE ID conflicts, missing assets and limits in one dialog."""
+        if getattr(self, '_world_loader', None) is None:
+            QMessageBox.information(self, "Map Checks", "Load a world first.")
+            return
+        from apps.components.Map_Editor.depends.map_checks import MapChecksDialog
+        dlg = getattr(self, '_map_checks_dlg', None)
+        if dlg is None:
+            dlg = self._map_checks_dlg = MapChecksDialog(self)
+        dlg.show()
+        dlg.raise_()
+        dlg._run_lod()
+
+    def _savepoint_dir(self): #vers 1
+        """Save point folder for the loaded world (per game root / dat)."""
+        import hashlib
+        key = getattr(self, '_loaded_dat_path', '') or getattr(self, '_game_root', '') or 'world'
+        sub = hashlib.md5(os.path.abspath(key).encode('utf-8')).hexdigest()[:12]
+        return str(_model_workshop_config_dir() / 'savepoints' / sub)
+
+    def _create_savepoint(self, label="Manual"): #vers 2
+        """Snapshot every changed IPL's data to a save point file."""
+        loader = getattr(self, '_world_loader', None)
+        self._refresh_dirty_ipls()
+        names = sorted(getattr(self, '_dirty_ipls', set()))
+        if loader is None or not (names or self._ide_pending):
+            self._set_status("Save point: no unsaved changes to record")
+            return None
+        from apps.components.Map_Editor.depends.map_changes import collect_ipl_state, write_savepoint
+        meta = {'game_root': getattr(self, '_game_root', ''),
+                'dat_path': getattr(self, '_loaded_dat_path', ''),
+                'game': getattr(loader, 'game', ''),
+                'ide': [{'model_id': o.model_id, 'raw': raw} for o, _p, raw in self._ide_pending.values()]}
+        try:
+            path = write_savepoint(self._savepoint_dir(), label, meta, collect_ipl_state(loader, names))
+        except Exception as e:
+            QMessageBox.warning(self, "Save Point", f"Couldn't write save point: {e}")
+            return None
+        self._set_status(f"Save point: {len(names)} IPL(s) -> {os.path.basename(path)}")
+        return path
+
+    def _auto_savepoint(self): #vers 1
+        """Timer: save point only if edits changed since the last one."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            return
+        from apps.components.Map_Editor.depends.map_changes import ipl_signatures, prune_savepoints
+        self._refresh_dirty_ipls()
+        if not self._dirty_ipls:
+            return
+        sigs = ipl_signatures(loader)
+        sig = hash(tuple(sorted((n, sigs.get(n)) for n in self._dirty_ipls)))
+        if sig == self._last_savepoint_sig:
+            return
+        if self._create_savepoint("Auto"):
+            self._last_savepoint_sig = sig
+            prune_savepoints(self._savepoint_dir(), int(self.map_settings.get('savepoints_keep') or 20))
+
+    def _restore_savepoint_dialog(self): #vers 2
+        """Pick a save point and load its IPL data back in (undoable)."""
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            QMessageBox.information(self, "Restore Save Point", "Load a world first.")
+            return
+        from datetime import datetime
+        from apps.components.Map_Editor.depends.map_changes import (
+            list_savepoints, read_savepoint, state_from_json, collect_ipl_state, replace_ipl_state)
+        points = list_savepoints(self._savepoint_dir())
+        if not points:
+            QMessageBox.information(self, "Restore Save Point", "No save points for this world yet.")
+            return
+        labels = [f"{datetime.fromtimestamp(p['created']):%Y-%m-%d %H:%M:%S}  {p['label']}  "
+                  f"({len(p['ipls'])} IPL: {', '.join(p['ipls'][:4])}{'...' if len(p['ipls']) > 4 else ''})"
+                  for p in points]
+        pick, ok = QInputDialog.getItem(self, "Restore Save Point", "Save point:", labels, 0, False)
+        if not ok:
+            return
+        chosen = points[labels.index(pick)]
+        try:
+            body = read_savepoint(chosen['path'])
+            snap = state_from_json(body.get('ipls', {}))
+            ide_edits = body.get('meta', {}).get('ide', [])
+        except Exception as e:
+            QMessageBox.warning(self, "Restore Save Point", f"Couldn't read save point: {e}")
+            return
+        loaded = {i.source_ipl for i in loader.instances} | set(getattr(self, '_ipl_baseline', {}))
+        missing = sorted(n for n in snap if n not in loaded)
+        snap = {n: v for n, v in snap.items() if n in loaded}
+        for rec in ide_edits:
+            obj = loader.get_object(rec.get('model_id'))
+            if obj is not None and not self._check_ide_raw(obj, rec.get('raw', '')):
+                self._apply_ide_raw(obj, rec['raw'])
+        if not snap and ide_edits:
+            self._set_status(f"Restored {len(ide_edits)} IDE edit(s) from save point")
+            return
+        if not snap:
+            QMessageBox.warning(self, "Restore Save Point",
+                                "None of this save point's IPLs are loaded:\n\n" + "\n".join(missing))
+            return
+        before = collect_ipl_state(loader, list(snap))
+        before = {n: {c: list(v) for c, v in cats.items()} for n, cats in before.items()}
+
+        def _apply(state):
+            replace_ipl_state(loader, state)
+            self._all_instances = list(loader.instances)
+            self._populate_object_browser(loader)
+            self._populate_instance_list(loader)
+            self._apply_ipl_visibility_filter(clear_display_lists=False)
+            self._refresh_dirty_ipls()
+
+        _apply(snap)
+        self._push_map_undo(lambda: _apply(before), lambda: _apply(snap),
+                            f"Restore save point ({len(snap)} IPL)")
+        msg = f"Restored {len(snap)} IPL(s) from save point - not written to game files until you save"
+        if missing:
+            msg += f"; skipped {len(missing)} not loaded"
+        self._set_status(msg)
+
+    def _save_ipl_in_place(self, ipl_name, confirm=True): #vers 2
+        """Save edits back to the original IPL: text file, loose binary, or IMG stream. Returns True on success."""
+        ok = self._write_ipl_in_place(ipl_name, confirm)
+        if ok:
+            self._mark_ipl_saved(ipl_name)
+        return ok
+
+    def _write_ipl_in_place(self, ipl_name, confirm): #vers 1
+        """Worker for _save_ipl_in_place; False on refusal, cancel or error."""
+        import struct as _struct
+        from apps.methods.gta_dat_parser import write_binary_ipl_inst_only, detect_ipl_format
+        loader = getattr(self, '_world_loader', None)
+        if loader is None:
+            return False
+        title = "Save IPL"
+        matching = [i for i in (getattr(self, '_all_instances', None) or []) if i.source_ipl == ipl_name]
+
+        # binary stream inside an IMG archive (SA)
+        src = self._binary_stream_source(ipl_name)
+        if src is not None:
+            archive_path, entry_name = src
+            model_cache = getattr(self, '_model_cache', None)
+            img = model_cache._opened_img_files.get(archive_path) if model_cache else None
+            if img is None:
+                from apps.methods.img_core_classes import IMGFile
+                img = IMGFile(archive_path)
+                if not img.open():
+                    QMessageBox.warning(self, title, f"Couldn't open {archive_path}")
+                    return False
+            entry = next((e for e in img.entries if getattr(e, 'name', '') == entry_name), None)
+            if entry is None:
+                QMessageBox.warning(self, title, f"{entry_name} not found in {archive_path}")
+                return False
+            old = img.read_entry_data(entry)
+            if len(old) >= 24 and _struct.unpack_from("<I", old, 20)[0]:
+                QMessageBox.warning(self, title,
+                    f"{entry_name} has parked cars; the binary writer only writes instances. Not saved.")
+                return False
+            if confirm and QMessageBox.question(self, title,
+                    f"Write {len(matching)} instance(s) back into {entry_name} "
+                    f"inside {os.path.basename(archive_path)}?\n(The archive is backed up first.)"
+                    ) != QMessageBox.StandardButton.Yes:
+                return False
+            if not img.add_entry(entry_name, write_binary_ipl_inst_only(matching)):
+                QMessageBox.warning(self, title, f"Couldn't write {entry_name}: "
+                                    f"{getattr(img, 'last_error', 'archive refused the data')}")
+                return False
+            self._set_status(f"Saved {len(matching)} instance(s) into {entry_name} ({os.path.basename(archive_path)})")
+            return True
+
+        stem = getattr(self, '_ipl_display_to_stem', {}).get(ipl_name)
+        entry = loader.available_ipls.get(stem) if stem else None
+        if entry is None or not entry.exists:
+            QMessageBox.warning(self, title, f"No file on disk for {ipl_name}. Use Save IPL Data As...")
+            return False
+        path = entry.abs_path
+        with open(path, 'rb') as f:
+            head = f.read(64)
+
+        # loose binary IPL file
+        if detect_ipl_format(head) == 'binary':
+            with open(path, 'rb') as f:
+                old = f.read()
+            if len(old) >= 24 and _struct.unpack_from("<I", old, 20)[0]:
+                QMessageBox.warning(self, title,
+                    f"{ipl_name} has parked cars; the binary writer only writes instances. Not saved.")
+                return False
+            if confirm and QMessageBox.question(self, title,
+                    f"Overwrite {path} with {len(matching)} instance(s)?\n(A backup is made first.)"
+                    ) != QMessageBox.StandardButton.Yes:
+                return False
+            from apps.methods.file_backup import safe_write_bytes
+            try:
+                safe_write_bytes(path, write_binary_ipl_inst_only(matching))
+            except Exception as e:
+                QMessageBox.warning(self, title, f"Failed to save: {e}")
+                return False
+            self._set_status(f"Saved {len(matching)} instance(s) to {path}")
+            return True
+
+        # text IPL
+        built = self._build_ipl_text_lines(ipl_name)
+        if not built or not built[0]:
+            QMessageBox.information(self, title, f"No loaded data found for {ipl_name}.")
+            return False
+        lines_out, total_written, section_order = built
+        if confirm and QMessageBox.question(self, title,
+                f"Overwrite {path} ({total_written} entries, {len(section_order)} section(s))?\n"
+                f"(A backup is made first.)") != QMessageBox.StandardButton.Yes:
+            return False
+        try:
+            _write_ipl_lines(path, [l + '\n' for l in lines_out])
+        except Exception as e:
+            QMessageBox.warning(self, title, f"Failed to save: {e}")
+            return False
+        self._set_status(f"Saved {total_written} entries to {path}")
+        return True
 
     def _verify_binary_ipl_parser(self, archive_path, entry_name): #vers 1
         """Diagnostic dry run - reads and parses one binary IPL entry
@@ -23933,7 +20335,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             insert_at += 1
         order.insert(insert_at, entry_name)
 
-    def _load_binary_ipl_stream(self, archive_path, entry_name): #vers 1
+    def _load_binary_ipl_stream(self, archive_path, entry_name): #vers 2
         """Actually load one binary IPL stream entry's instance data"""
         if entry_name in getattr(self, '_loaded_binary_ipls', set()):
             self._set_status(f"{entry_name} is already loaded")
@@ -23969,10 +20371,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         self._set_status(f"Parsing {entry_name} ({len(data)} bytes)...")
         QApplication.processEvents()
-        from apps.methods.gta_dat_parser import BinaryIPLParser
+        from apps.methods.gta_dat_parser import BinaryIPLParser, WPLParser
         game = getattr(loader, 'game', None)
-        parser = BinaryIPLParser(game=game) if game else BinaryIPLParser()
-        if not parser.parse(data, source_name=entry_name):
+        if entry_name.lower().endswith('.wpl'):      # GTA IV streamed placements
+            parser = WPLParser(getattr(loader, '_iv_hash_names', {}))
+            ok = parser.parse_bytes(data, entry_name)
+        else:
+            parser = BinaryIPLParser(game=game) if game else BinaryIPLParser()
+            ok = parser.parse(data, source_name=entry_name)
+        if not ok:
             errs = "; ".join(parser.stats.errors[:3])
             self._set_status(f"Failed to parse {entry_name}: {errs}")
             return
@@ -23984,6 +20391,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if obj is not None:
                 inst.model_name = obj.model_name
                 resolved_count += 1
+        if isinstance(parser, WPLParser):
+            loader.grges += parser.grges
+            loader.culls += parser.culls
 
         # Merge into loader.instances (Aug 16 2026)
         loader.instances.extend(parser.instances)
@@ -24021,8 +20431,32 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         self._refresh_ipl_inst_file_panel()
 
+    def _populate_wpl_table(self, table, loader, entry, display_name): #vers 1
+        """GTA IV .wpl INST rows; file read here if not loaded yet."""
+        from apps.methods.gta_dat_parser import WPLParser
+        if getattr(self, '_ipl_data_type', 'inst') != 'inst':
+            table.setRowCount(0)
+            return
+        insts = [i for i in getattr(self, '_all_instances', []) if i.source_ipl == display_name]
+        if not insts:
+            parser = WPLParser(getattr(loader, '_iv_hash_names', {}))
+            if parser.parse(entry.abs_path):
+                insts = parser.instances
+        headers = ["ID", "Model", "Int", "Pos X", "Pos Y", "Pos Z",
+                   "Scale X", "Scale Y", "Scale Z", "Rot X", "Rot Y", "Rot Z", "Rot W"]
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(insts))
+        for r, inst in enumerate(insts):
+            values = [inst.model_id, inst.model_name, inst.interior,
+                      f"{inst.pos_x:.6f}", f"{inst.pos_y:.6f}", f"{inst.pos_z:.6f}",
+                      inst.scale_x, inst.scale_y, inst.scale_z,
+                      f"{inst.rot_x:.7f}", f"{inst.rot_y:.7f}", f"{inst.rot_z:.7f}", f"{inst.rot_w:.7f}"]
+            for c, value in enumerate(values):
+                table.setItem(r, c, QTableWidgetItem(str(value)))
+
     def _show_preload_dialog(self): #vers 2
-        """New "Preload" dialog (Aug 20 2026, per Keith: "we need a
+        """New "Preload" dialog (Aug 20 2026,  "we need a
         preload menu, on a right click, and map workshop menu, where
         it shows the contents on the game/data/ folder, picking the
         file >> over to the preload box, including the waterpro.dat,
@@ -24035,14 +20469,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         file types this app actually knows how to load (water.dat/
         waterpro.dat/timecyc.dat/.img right now) - unrecognised file
         types stay listed but do nothing when loaded, rather than
-        silently being hidden, since Keith's own request was to see
+        silently being hidden, since my own request was to see
         the real folder contents directly, not a filtered guess at
         what he might want.
 
-        Real additions (Aug 20 2026, per Keith: "need a save button
+         additions (Aug 20 2026,  "need a save button
         that remembers picked entries, also able to see the path
         files, dir level up down"):
-        - Real directory navigation - a real, editable current-folder
+        -  directory navigation - a real, editable current-folder
           path field, an "Up" button, and double-clicking a real
           subfolder entry (shown with a trailing "/") navigates into
           it, not just the one fixed data folder.
@@ -24117,7 +20551,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 current_folder[0] = typed
                 _refresh_avail_list()
         def _go_to_app_tex(): #vers 2
-            """Real fix (Aug 20 2026, per Keith: "tex folder was moved
+            """ fix (Aug 20 2026,  "tex folder was moved
             to depends/tex/ in map_workshop") - was computing the repo
             root (3 levels up from this file) then looking for tex/
             there; the real, current location is one level down from
@@ -24187,7 +20621,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         for full in saved_picks:
             full = self._to_gamedata_role_marker(full)
             if full.startswith('<gamedata-role>/'):
-                # Real fix (Aug 20 2026, same real role marker
+                #  fix (Aug 20 2026, same real role marker
                 # _apply_saved_preload_picks/_do_load below both
                 # resolve - without this, os.path.isfile below would
                 # always be False for a real "<gamedata-role>/..."
@@ -24224,7 +20658,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         outer.addLayout(btn_row)
 
         def _do_save(): #vers 3
-            """Real fix (Aug 20 2026, per Keith: "reload has the
+            """ fix (Aug 20 2026,  "reload has the
             entries saved but there not being loaded") - this never
             called map_settings.save() (only .set(), which just
             updates the in-memory dict) - real persistence to disk
@@ -24234,7 +20668,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             explicit "save this setting now" action in this file
             already uses.
 
-            Real fix (Aug 20 2026, per Keith: "../data/waterpro.dat -
+             fix (Aug 20 2026,  "../data/waterpro.dat -
             for LC and VC, but SA map looks for ../data/water.dat") -
             the marker used to hardcode the specific filename it was
             saved with ("<gamedata>/waterpro.dat"), which broke the
@@ -24261,7 +20695,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.map_settings.save()
             status_label.setText(f"Saved {len(paths)} pick(s) - restored automatically next time this opens.")
         def _do_load(): #vers 4
-            """Real fix (Aug 20 2026, same real role marker
+            """ fix (Aug 20 2026, same real role marker
             _apply_saved_preload_picks/the restore-into-UI logic above
             both resolve, via the same shared _resolve_gamedata_role_
             marker) - a manually-clicked "Load" on a real, saved
@@ -24283,7 +20717,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     loaded.append(item.text())
                 else:
                     unrecognised.append(item.text())
-            # Real fix (Aug 20 2026, per Keith: "I'd prefer to show
+            #  fix (Aug 20 2026,  "I'd prefer to show
             # those one line at a time, not as a single word-wrapped
             # line") - each real loaded/unrecognised filename now gets
             # its own real line, instead of one comma-joined, wrapped
@@ -24305,7 +20739,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _apply_saved_preload_picks(self): #vers 2
         """Automatically re-apply the Preload dialog's own saved
         picks once a real world is available to apply them to (Aug
-        20 2026, per Keith: "starting map_workshop back up, I noticed
+        20 2026,  "starting map_workshop back up, I noticed
         there is nothing in the startup, saying preloading files,
         etc") - Save Picks previously only restored the saved list
         back into the dialog's own UI the next time it was manually
@@ -24314,7 +20748,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         preloaded_file every dialog Load/manual pick already uses, so
         behaviour is identical either way - just automatic now.
 
-        Real fix (Aug 20 2026, per Keith: "preload still not working,
+         fix (Aug 20 2026,  "preload still not working,
         and nothing in the status log, is there a conflict somewhere")
         - traced map_settings' own real save/load path (singleton,
         debounced auto-save, app-folder-relative config path) and it
@@ -24334,7 +20768,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         QApplication.processEvents()
         loaded, unrecognised, missing = [], [], []
         for path in paths:
-            # Self-healing (Aug 20 2026, per Keith: "the VC waterpro.
+            # Self-healing (Aug 20 2026,  "the VC waterpro.
             # dat shows across SA and LC, so this needs fixing") -
             # normalises a real legacy absolute path (saved before the
             # marker fix existed) to the same real marker a fresh save
@@ -24343,7 +20777,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             # directly as-is.
             path = self._to_gamedata_role_marker(path)
             if path.startswith('<gamedata-role>/'):
-                # Real fix (Aug 20 2026, per Keith: "../data/waterpro.
+                #  fix (Aug 20 2026,  "../data/waterpro.
                 # dat - for LC and VC, but SA map looks for
                 # ../data/water.dat") - resolved via the shared
                 # _resolve_gamedata_role_marker, which tries every
@@ -24372,7 +20806,100 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 f"folder ({', '.join(missing)})")
         return loaded
 
-    def _waterpro_to_cells(self, waterpro, game): #vers 4
+    def _radar_settings_path(self): #vers 1
+        """radar_settings.json in the loaded game root, or ''."""
+        root = getattr(self, '_game_root', '') or ''
+        return os.path.join(root, 'radar_settings.json') if root and os.path.isdir(root) else ''
+
+    def _load_radar_settings(self): #vers 1
+        """Per-game alignment dict from radar_settings.json."""
+        path = self._radar_settings_path()
+        data = {'radar_offset': [0.0, 0.0], 'water_offset': [0.0, 0.0], 'water_fix': None}
+        if path and os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data.update(json.load(f))
+            except (OSError, ValueError) as e:
+                self._set_status(f"radar_settings.json unreadable: {e}")
+        return data
+
+    def _save_radar_settings(self, data): #vers 1
+        """Write per-game alignment to radar_settings.json."""
+        path = self._radar_settings_path()
+        if not path:
+            self._set_status("No game loaded - alignment not saved")
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except OSError as e:
+            self._set_status(f"Could not save radar_settings.json: {e}")
+
+    def _apply_radar_settings(self): #vers 1
+        """Push saved radar/water offsets and fix to the viewport."""
+        data = self._load_radar_settings()
+        self._radar_settings = data
+        vp = getattr(self, 'preview_widget', None)
+        if vp is None:
+            return
+        if hasattr(vp, 'set_radar_tex_offset'):
+            vp.set_radar_tex_offset(*data['radar_offset'])
+        if hasattr(vp, 'set_water2_nudge'):
+            vp.set_water2_nudge(*data['water_offset'])
+        if hasattr(vp, 'set_water2_fix_override'):
+            vp.set_water2_fix_override(data.get('water_fix'))
+
+    def _radar_align_offset(self, layer): #vers 1
+        """Current (x, y) offset for 'radar' or 'water'."""
+        data = getattr(self, '_radar_settings', None) or self._load_radar_settings()
+        x, y = data.get(f'{layer}_offset', [0.0, 0.0])
+        return float(x), float(y)
+
+    def _set_radar_align_offset(self, layer, x, y): #vers 1
+        """Set, apply and save one layer's offset."""
+        data = getattr(self, '_radar_settings', None) or self._load_radar_settings()
+        data[f'{layer}_offset'] = [float(x), float(y)]
+        self._save_radar_settings(data)
+        self._apply_radar_settings()
+
+    def _water_fix_active(self): #vers 1
+        """Effective water fix state for the loaded game."""
+        data = getattr(self, '_radar_settings', None) or self._load_radar_settings()
+        if data.get('water_fix') is not None:
+            return bool(data['water_fix'])
+        mode = self._water2_offset_mode()
+        game = getattr(getattr(self, '_world_loader', None), 'game', '')
+        return mode == 'all' or (mode == 'vc' and game == 'vc')
+
+    def _set_water_fix(self, on): #vers 1
+        """Per-game water fix on/off, saved."""
+        data = getattr(self, '_radar_settings', None) or self._load_radar_settings()
+        data['water_fix'] = bool(on)
+        self._save_radar_settings(data)
+        self._apply_radar_settings()
+        dlg = getattr(self, '_radar_align_dlg', None)
+        if dlg is not None and dlg.isVisible():
+            dlg._refresh()
+
+    def _show_radar_align_dialog(self): #vers 1
+        """Open the radar/water alignment window."""
+        from apps.gui.radar_align_dialog import RadarAlignDialog
+        dlg = getattr(self, '_radar_align_dlg', None)
+        if dlg is None:
+            dlg = RadarAlignDialog(self, self)
+            self._radar_align_dlg = dlg
+        dlg._refresh()
+        dlg.show()
+        dlg.raise_()
+
+    def _water2_offset_mode(self): #vers 1
+        """Radar/water fix mode; old VC-only bool when unset."""
+        mode = self.map_settings.get('water2_offset_mode')
+        if mode in ('vc', 'all', 'off'):
+            return mode
+        return 'vc' if self.map_settings.get('water2_offset_vc_only') else 'all'
+
+    def _waterpro_to_cells(self, waterpro, game): #vers 5
         """Real, confirmed grid-to-cells logic (Aug 20 2026, re-
         applied) - shared between the manual Preload path and the
         automatic world-load retool below. Skips real "dry"/cutout
@@ -24381,7 +20908,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         index bounds check below too, but named explicitly for
         clarity.
 
-        Real fix (Aug 20 2026, per Keith: "the water is 90 degrees
+         fix (Aug 20 2026,  "the water is 90 degrees
         clockwise oriented, wrong against the radar") - re-applies
         the real anticlockwise rotation, undoing the previous revert.
         That revert was the real mistake, not this rotation: matching
@@ -24391,14 +20918,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         variables do - "radar is the trusted reference" meant fix
         water to visually align with it, not copy its code verbatim
         regardless of whether the underlying data agrees. Confirmed
-        directly, again, by Keith's own real screenshot after the
+        directly, again, by my own real screenshot after the
         revert: water was genuinely still 90 degrees off against the
         real radar layer. (x,y) -> (-y,x) applied to every real cell
         corner reduces to row driving x directly, col driving y
         directly - see the git history for the full, real derivation
         this was first verified against."""
-        from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS
-        preset = RADAR_GRID_PRESETS.get(game, RADAR_GRID_PRESETS['vc'])
+        from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS, WATER_GRID_PRESETS
+        # SOL's water grid genuinely differs from its radar grid (Sep
+        # 5 2026  own real, uploaded GTASOL-CoreHacks
+        # source - see WATER_GRID_PRESETS' own docstring for the full
+        # derivation) - every other game's water-uses-radar's-size
+        # assumption is already confirmed correct and unchanged here.
+        preset = WATER_GRID_PRESETS.get(game) or RADAR_GRID_PRESETS.get(game, RADAR_GRID_PRESETS['vc'])
         grid_size = preset['grid_size']
         half = grid_size / 2.0
         gw = waterpro.grid_width
@@ -24417,17 +20949,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 cells.append((min_x, min_y, min_x + cell, min_y + cell, height))
         return cells
 
-    def _waterpro_physical_to_cells(self, waterpro, game): #vers 3
-        """The other real water layer (Aug 20 2026, per Keith: "when
+    def _waterpro_physical_to_cells(self, waterpro, game): #vers 4
+        """The other real water layer (Aug 20 2026,  "when
         you right click the water button, show the other water
         layer") - waterpro.dat's own physical_map, a real, separate
         grid exactly double visible_map's own width/height per side,
         covering the same real world area at twice the resolution.
         Same real anticlockwise rotation as _waterpro_to_cells (see
         its own docstring for the full, real reasoning), since it's
-        the same real coordinate system just finer-grained."""
-        from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS
-        preset = RADAR_GRID_PRESETS.get(game, RADAR_GRID_PRESETS['vc'])
+        the same real coordinate system just finer-grained. Same
+        SOL-specific grid-size correction as _waterpro_to_cells too
+        (Sep 5 2026) - see WATER_GRID_PRESETS' own docstring."""
+        from apps.methods.gta_dat_parser import RADAR_GRID_PRESETS, WATER_GRID_PRESETS
+        preset = WATER_GRID_PRESETS.get(game) or RADAR_GRID_PRESETS.get(game, RADAR_GRID_PRESETS['vc'])
         grid_size = preset['grid_size']
         half = grid_size / 2.0
         gw = waterpro.grid_width * 2
@@ -24459,7 +20993,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             cells.append((min(xs), min(ys), max(xs), max(ys), sum(zs) / len(zs)))
         return cells
 
-    def _apply_water2_preload(self): #vers 3
+    def _apply_water2_preload(self): #vers 5
         """Combine whatever's been preloaded so far (Aug 20 2026, re-
         applied) - water cells and the water texture can be preloaded
         in either order, or independently, via separate _load_
@@ -24476,6 +21010,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if cells is None:
             return   # texture preloaded alone, before any real water data
         vp.set_water2_data(cells, texture_path)
+        if getattr(self, '_water_gauge', None) is not None:
+            self._water_gauge.update()
+        if getattr(self, '_vp_gauges', None) is not None:
+            self._vp_gauges.refresh()
         water_btn = getattr(self, '_show_water_chk', None)
         if water_btn is not None:
             water_btn.setEnabled(True)
@@ -24488,12 +21026,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         water2 system automatically at world-load time (Aug 20 2026,
         re-applied) - those are already populated by the existing,
         already-working auto-load pipeline (load_waterpro_dat/load_
-        water_dat), so water2 doesn't need Keith to separately re-pick
+        water_dat), so water2 doesn't need ,separately re-pick
         the same file through the Preload dialog every time - only
         the texture (a real app asset, not part of any game's own
         data) still needs a manual preload.
 
-        Real fix (Aug 20 2026, per Keith: "offset should only be for
+         fix (Aug 20 2026,  "offset should only be for
         VC, so we need a toggle to effect VC waterpro.dat only") -
         pushes the current game to the viewport via set_water2_game
         each time, so _draw_water2 can gate the X/Y offset to VC only
@@ -24519,14 +21057,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._water2_cells_pending = self._water_shapes_to_cells(water_shapes)
             self._apply_water2_preload()
 
-    def _load_preloaded_file(self, path): #vers 2
+    def _load_preloaded_file(self, path): #vers 3
         """Recognise and load one real file by its own real filename
-        (Aug 20 2026, per Keith's own Preload dialog request above).
+        (Aug 20 2026  own Preload dialog request above).
         Returns True if this app knows how to load that real file
         type and did so, False if the type isn't recognised (the
         dialog still lists it, just can't act on it yet).
 
-        Real fix (Aug 20 2026, per Keith: "if those files pre loaded,
+         fix (Aug 20 2026,  "if those files pre loaded,
         in objects browser the ipl and zon entries would already be
         highlighted, so the off on buttons wouldn't need to change")
         - loading the raw data alone wasn't enough on its own:
@@ -24541,7 +21079,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         name = os.path.basename(path).lower()
         if name.endswith('.img'):
             # Same real fix as the world-load hook (Aug 20 2026, per
-            # Keith: "preloading the img needs to follow the same
+            #  : "preloading the img needs to follow the same
             # rules as loading the img file into img factory and show
             # the tab so the other tools pick up those models") -
             # opens it as a real, visible tab via the same real entry
@@ -24559,7 +21097,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 mw._load_img_file_in_new_tab(path)
             return True
         if name.endswith('.ipl') or name.endswith('.zon'):
-            # Real fix (Aug 20 2026, per Keith: "automatically search
+            #  fix (Aug 20 2026,  "automatically search
             # for maps, paths, dat files") - routes through the same
             # real IPL Sections table entry every eye-icon click
             # already uses (_on_ipl_section_cell_clicked), rather than
@@ -24581,7 +21119,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     return True
             return False   # not a real row in this world's own IPL list
         if name.endswith('.png') or name.endswith('.jpg') or name.endswith('.jpeg'):
-            # Real texture asset (Aug 20 2026, re-applied per Keith:
+            #  texture asset (Aug 20 2026, re-applied .per:
             # "there is a tex folder now in img-factory-1.6, in there
             # is the water texture, so this can also be preloaded as
             # an asset") - doesn't need a world already loaded, just
@@ -24595,7 +21133,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if loader is None:
             return False
         if name == 'waterpro.dat':
-            # Re-applied (Aug 20 2026, per Keith: "get the water
+            # Re-applied (Aug 20 2026,  "get the water
             # working, from the preloaded file, [water] button
             # off/on toggle") - pushes to the new water2 system via
             # the shared _waterpro_to_cells helper (also used by the
@@ -24623,7 +21161,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self.map_settings.set('timecyc_path', path)
             vp = getattr(self, 'preview_widget', None)
             if vp is not None and hasattr(vp, 'set_timecyc_path'):
-                vp.set_timecyc_path(path)
+                known_game = getattr(getattr(self, '_world_loader', None), 'game', None)
+                vp.set_timecyc_path(path, known_game=known_game)
             tcyc_btn = getattr(self, '_tcyc_chk', None)
             if tcyc_btn is not None and hasattr(tcyc_btn, 'set_shown'):
                 tcyc_btn.set_shown(True)
@@ -24634,7 +21173,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _app_asset_folder(self, name): #vers 1
         """This app's own "depends/<name>/" asset folder (Aug 20
-        2026, per Keith: "a right-click option to show other
+        2026,  "a right-click option to show other
         timecyc.dat files that I'll put in an asset folder" / "the
         option settings path for using other water textures") -
         shared helper for the same real "depends/<name>/" location
@@ -24682,7 +21221,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _resolve_gamedata_role_marker(self, marker): #vers 1
         """Resolve a real "<gamedata-role>/<role>" marker (Aug 20
-        2026, per Keith: "../data/waterpro.dat - for LC and VC, but
+        2026,  "../data/waterpro.dat - for LC and VC, but
         SA map looks for ../data/water.dat") - each real role tries
         every real filename that role's own real game families
         actually use, in order, returning the first that genuinely
@@ -24704,7 +21243,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             'water': ['waterpro.dat', 'water.dat'],
             'timecyc': ['timecyc.dat'],
         }.get(role, [])
-        # Case-insensitive fix (Aug 20 2026, per Keith's own confirmed
+        # Case-insensitive fix (Aug 20 2026  own confirmed
         # `ls -la`: VC's own real waterpro.dat is genuinely named
         # WATERPRO.DAT on disk - a plain os.path.join+isfile only
         # tries the one, exact given case, correct on Windows' own
@@ -24723,10 +21262,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _to_gamedata_role_marker(self, path): #vers 1
         """Normalise a saved preload entry to a real "<gamedata-role>/
         <role>" marker if its own filename is one of the 3 real, per-
-        game roles - self-healing fix (Aug 20 2026, per Keith: "the VC
+        game roles - self-healing fix (Aug 20 2026,  "the VC
         waterpro.dat shows across SA and LC, so this needs fixing") -
         a pick saved before the marker fix existed is still a real,
-        plain absolute path in Keith's own real, already-persisted
+        plain absolute path in my own real, already-persisted
         settings file; that old fix only changed how new saves are
         written, it never migrated what was already there, so the old
         real, stale absolute path kept right on loading regardless of
@@ -24747,13 +21286,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _auto_detect_timecyc_path(self): #vers 4
         """Look for a real timecyc.dat next to the currently loaded
-        game's own real data folder (Aug 20 2026, per Keith: "we need
+        game's own real data folder (Aug 20 2026,  "we need
         to be able to detect the timecyc.dat file without the need
         for a path, and still keep the toggle" - "show from gameroot/
         data/timecyc.dat"). Case-insensitive match (real installs
         vary). Returns the real path if found, else ''.
 
-        Real SOL fix (Aug 20 2026, per Keith: "with GTASOL looking
+         SOL fix (Aug 20 2026,  "with GTASOL looking
         for /sol/gta_sol.dat the waterpro.dat would be in gameroot/
         data/waterpro.dat" - the identical real gap applies to
         timecyc.dat too) - the folder self._loaded_dat_path's own
@@ -24763,7 +21302,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         real, shared SOL-aware logic rather than a second, separate
         copy of it.
 
-        Real fallback added (Aug 20 2026, per Keith: "we also have
+         fallback added (Aug 20 2026,  "we also have
         the project profiles to fall back on") - if the loaded
         world's own folder doesn't have it, also tries self.main_
         window.game_root/data - the real, already-existing Project
@@ -24773,7 +21312,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         lives" independent of whatever .dat file happened to be
         loaded this session.
 
-        Real fix (Aug 21 2026, per Keith's own real, uploaded
+         fix (Aug 21 2026  own real, uploaded
         timecyc.dat and timecycp.dat files: "timecyc.dat and
         timecycp.dat don't seem to work when SA is loaded?") - this
         only ever looked for "timecyc.dat", never "timecycp.dat" at
@@ -24797,13 +21336,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _load_water_texture_from_particle_txd(self): #vers 1
         """Read the currently loaded game's own real water texture
-        directly from particle.txd (Aug 20 2026, per Keith: "Next are
+        directly from particle.txd (Aug 20 2026,  "Next are
         the ../model/particle.txd water textures; you have the
         screenshots to fall back on") - same real, already-working
         ModelCache.get_textures/parse_txd pipeline _load_radar_tex_
         tiles already uses (any RW format decoded to plain RGBA
         automatically). Tries every real name confirmed directly from
-        Keith's own screenshots: "waterclear256" (VC's own real 256x256
+        my own screenshots: "waterclear256" (VC's own real 256x256
         DXT1, and SA's own real, differently-sized/formatted 128x128
         ARGB8888 - same name, two genuinely different real files, per-
         game, not a conflict since only one game's own particle.txd is
@@ -24827,10 +21366,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 return (rgba, w, h)
         return None
 
-    def _load_radar_tex_tiles(self, game_key): #vers 1
+    def _load_radar_tex_tiles(self, game_key): #vers 2
         """Read every real radarNN.txd texture for game_key directly
         from whichever IMG archive is already loaded (via ModelCache -
-        the same index used for models/collision), per Keith: "those
+        the same index used for models/collision),  "those
         radar.txd files are in the gta3... unless it's SOL where
         they're in another file" - no separate tiles folder needed,
         this reads the game's own real, already-indexed archive.
@@ -24848,7 +21387,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return []
         result = []
         for i in range(tile_count):
-            name = f"radar{i:04d}" if game_key == 'sol' else f"RADAR{i:02d}"
+            if game_key == 'iv':
+                name = f"radar{i}"          # IV radar.img: radar0-radar143
+            else:
+                name = f"radar{i:04d}" if game_key == 'sol' else f"RADAR{i:02d}"
             textures = model_cache.get_textures(name)
             if not textures:
                 result.append(None)
@@ -24862,11 +21404,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 result.append(None)
         return result
 
-    def _load_selected_ipl_sections(self, rows): #vers 3
+    def _load_selected_ipl_sections(self, rows): #vers 6
         """Show/load every currently-hidden row among the given table
         rows - the "Load Selected" context menu action.
 
-        Real fix (Aug 20 2026, per Keith: "when selecting multiply
+         fix (Aug 20 2026,  "when selecting multiply
         ipls, all select, load all, this opens multiple dialogues. It
         should be one window with the title and process change; below
         should be the IPL data") - each selected IPL used to get its
@@ -24892,15 +21434,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if not ipl_names:
             return
 
-        progress = QProgressDialog("Loading IPLs…", "Cancel", 0, len(ipl_names), self)
-        progress.setWindowTitle("Loading Selected IPLs")
-        progress.setMinimumDuration(0)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self._shared_load_progress = progress
-
+        dlg = _IplLoadDialog(self, len(ipl_names))
+        self._ipl_load_dlg = dlg
+        self._ipl_batch_defer, self._ipl_batch_dirty = True, False
+        done = 0
         try:
             for idx, ipl_name in enumerate(ipl_names):
-                if progress.wasCanceled():
+                if dlg.cancelled:
                     break
                 if ipl_name not in getattr(self, '_hidden_ipls', set()):
                     continue   # already made visible by an earlier iteration's own load
@@ -24912,13 +21452,23 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                         break
                 if current_row is None:
                     continue   # row no longer exists (e.g. removed by an earlier rebuild)
-                progress.setWindowTitle(f"Loading Selected IPLs ({idx + 1} of {len(ipl_names)})")
-                progress.setLabelText(f"Loading {ipl_name}…")
-                progress.setValue(idx)
-                self._on_ipl_section_cell_clicked(current_row, 0)
-            progress.setValue(len(ipl_names))
+                dlg.start_file(ipl_name, idx)
+                try:
+                    self._on_ipl_section_cell_clicked(current_row, 0)
+                except Exception as e:   # report, then carry on with the rest
+                    self._ipl_cell_click_in_progress = False
+                    dlg.message(f"{ipl_name} - failed: {e}")
+                    if self.main_window and hasattr(self.main_window, 'log_message'):
+                        self.main_window.log_message(f"[{ipl_name}] load failed: {e}")
+                    continue
+                done += 1
         finally:
-            self._shared_load_progress = None
+            self._ipl_load_dlg = None
+            self._ipl_batch_defer = False
+            if self._ipl_batch_dirty:
+                dlg.message("Refreshing world view...")
+                self._apply_ipl_visibility_filter(clear_display_lists=False)
+            dlg.finish(f"{'Cancelled - ' if dlg.cancelled else ''}{done} of {len(ipl_names)} IPL(s) loaded")
 
     def _on_ipl_sections_column_resized(self, logical_index, old_size, new_size): #vers 1
         """Persist the user's column widths for the IPL Sections table
@@ -25017,9 +21567,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """[TCYC] toggle - show/hide the loaded timecyc file's own
         sky/ambient effect at whatever the current Tobj/2DFX time
         happens to be, merged into the same row as [2DFX]/[TObj]
-        (Aug 20 2026, per Keith's own request).
+        (Aug 20 2026  own request).
 
-        Real fix (Aug 20 2026, per Keith: "Timecyc playing should be
+         fix (Aug 20 2026,  "Timecyc playing should be
         linked to TOJB, 2DFX time button, we dont need to start time
         with TCYC button, thats only meant to toggle the sky on or
         off?") - a real, direct correction to an earlier version of
@@ -25035,7 +21585,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         not a gap to paper over by reaching into a control this
         button was never meant to own.
 
-        Real fix (Aug 20 2026, per Keith: "turning the button on
+         fix (Aug 20 2026,  "turning the button on
         shows a timer inside it, we dont need that") - removed the
         earlier "live time label" this button used to grow while
         playing; the same real time already shows on the separate
@@ -25047,9 +21597,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             vp.set_timecyc_playing(checked)
 
     def _show_alt_timecyc_menu(self, button): #vers 1
-        """Right-click [Tcyc]: pick an alternate timecyc.dat from this
+        """Middle-click [Tcyc]: pick an alternate timecyc.dat from this
         app's own depends/timecyc/ asset folder (Aug 20 2026, per
-        Keith: "each game has its own timecyc.dat, so we need to show
+         : "each game has its own timecyc.dat, so we need to show
         that, and also a right-click option to show other timecyc.dat
         files that I'll put in an asset folder"). A manual pick here
         overrides the current, auto-detected file for this world/
@@ -25075,14 +21625,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             menu.addAction(name, lambda p=path: self._apply_alt_timecyc(p))
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
-    def _apply_alt_timecyc(self, path): #vers 1
+    def _apply_alt_timecyc(self, path): #vers 2
         """Apply a manually-picked alternate timecyc.dat (Aug 20 2026,
         same real request as _show_alt_timecyc_menu above) - same real
         set_timecyc_path call the existing Settings > Browse... picker
         already uses."""
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(vp, 'set_timecyc_path'):
-            vp.set_timecyc_path(path)
+            known_game = getattr(getattr(self, '_world_loader', None), 'game', None)
+            vp.set_timecyc_path(path, known_game=known_game)
         self._set_status(f"Timecyc: using {os.path.basename(path)}")
 
     def _on_ipl_tab_changed(self, index): #vers 1
@@ -25100,10 +21651,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         self._on_ipl_data_type_changed(keys[index])
 
-    def _create_ipl_controls_dock(self): #vers 1
+    def _create_ipl_controls_dock(self): #vers 11
         """Dedicated dock for IPL viewing/filtering controls."""
         panel = QWidget()
-        from PyQt6.QtWidgets import QButtonGroup
         from apps.components.Map_Editor.depends.overlay_icons import OverlayIcons
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(6, 6, 6, 6)
@@ -25228,28 +21778,56 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         render_lod_btn.setStyleSheet(_compact_18)
         render_lod_menu = QMenu(render_lod_btn)
 
-        render_group = QActionGroup(render_lod_menu)
-        render_group.setExclusive(True)
+        # Model render style (Sep 5 2026  own detailed
+        # follow-up: renamed for clarity, and changed from a strict
+        # exclusive radio group to independently checkable entries
+        # that can also all be deselected - "Each entry in render
+        # needs to be selected or unselected... Deselect Model
+        # Textures to only show Col Wireframe". Soft-exclusive: picking
+        # one unchecks any other (still only one model style makes
+        # sense at a time), but unlike a real QActionGroup, clicking
+        # the already-checked one turns it off, leaving self._mode as
+        # None - _draw_world_instances' own None branch then shows
+        # collision only, with no separate Col Only mode needed.
         render_specs = [
-            ('textured',   "Texture",     "Full textures, as loaded from the game's TXDs"),
-            ('solid',      "Non-texture", "Flat/lit shading, no textures"),
-            ('semi_solid', "Semi-Solid",  "Flat/lit shading with reduced opacity - a ghosted, see-through look"),
-            ('wireframe',  "Wireframe",   "Edges only, no fill"),
-            ('dots',       "Dots",        "Just a point at each instance's own placement - no model or\n"
-                                          "texture loading at all, for viewing/navigating a huge map fast"),
+            ('textured',   "Model Textures",         "Full textures, as loaded from the game's TXDs"),
+            ('solid',      "Model W/Out Textures",   "Flat/lit shading, no textures"),
+            ('semi_solid', "Model Semi-Solid",       "Flat/lit shading with reduced opacity - a ghosted, see-through look"),
+            ('wireframe',  "Model Wireframe",        "Edges only, no fill"),
+            ('dots',       "Show models as Dots",    "Just a point at each instance's own placement - no model or\n"
+                                                      "texture loading at all, for viewing/navigating a huge map fast"),
         ]
+        render_labels = {m: l for m, l, t in render_specs}
+        render_actions = []
+
+        def _on_render_style_toggled(checked, mode):
+            if checked:
+                for action, m in render_actions:
+                    if m != mode:
+                        action.blockSignals(True)
+                        action.setChecked(False)
+                        action.blockSignals(False)
+                self._set_world_render_mode(mode, render_labels[mode], render_lod_btn)
+            elif not any(a.isChecked() for a, m in render_actions):
+                self._set_world_render_mode(None, "None", render_lod_btn)
+
         for mode, label_text, tooltip in render_specs:
             action = render_lod_menu.addAction(label_text)
             action.setCheckable(True)
-            action.setChecked(mode == 'textured')
+            action.setChecked(mode == getattr(
+                getattr(self, 'preview_widget', None), '_mode', 'textured'))
             action.setToolTip(tooltip)
-            action.triggered.connect(
-                lambda checked, m=mode, lbl=label_text, btn=render_lod_btn:
-                    self._set_world_render_mode(m, lbl, btn) if checked else None)
-            render_group.addAction(action)
+            render_actions.append((action, mode))
+        for action, mode in render_actions:
+            action.toggled.connect(lambda checked, m=mode: _on_render_style_toggled(checked, m))
 
         render_lod_menu.addSeparator()
 
+        # LOD display mode (Sep 5 2026,  originally reported
+        # as "Show LOD only can go, does not work" alongside removing
+        # Show Col Only, then clarified as a typo - only Col Only was
+        # meant to go) - back to a real 3-way exclusive radio, same
+        # mechanism as before, unaffected by the Col Only retirement.
         lod_group = QActionGroup(render_lod_menu)
         lod_group.setExclusive(True)
         lod_specs = [
@@ -25267,24 +21845,47 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         render_lod_menu.addSeparator()
 
-        # Collision overlay options (Aug 14 2026)
+        # Collision overlay options (Aug 14 2026, renamed + made
+        # soft-exclusive Sep 5 2026  "Only one COL entry
+        # should be shown, as there is no point trying to select them
+        # all" - same soft-exclusive-with-deselect pattern as the
+        # model-style group above, just against the 4 show_col_*
+        # viewport flags instead of self._mode.
         col_specs = [
-            ('ghosted',        "Show Ghosted Col",        "set_show_col_ghosted",
+            ('ghosted',        "Show COL Ghosted",        "set_show_col_ghosted",
              "Overlay collision geometry as a low-opacity ghost"),
-            ('surface_mapped', "Show Surface Mapped Col",  "set_show_col_surface_mapped",
+            ('surface_mapped', "Show COL Surfaces Mapping", "set_show_col_surface_mapped",
              "Overlay collision geometry coloured by surface/material type"),
-            ('semi_solid',     "Show Semi-Solid Col",      "set_show_col_semi_solid",
+            ('semi_solid',     "Show COL Semi-Solid",     "set_show_col_semi_solid",
              "Overlay collision geometry at higher opacity than Ghosted"),
-            ('wireframe',      "Show Wireframe Col",       "set_show_col_wireframe",
+            ('wireframe',      "Show COL Wireframe",      "set_show_col_wireframe",
              "Overlay collision geometry as edges only"),
         ]
+        col_actions = []
+
+        def _on_col_style_toggled(checked, mode, setter_name):
+            vp = getattr(self, 'preview_widget', None)
+            if checked:
+                for action, m, s in col_actions:
+                    if m != mode:
+                        action.blockSignals(True)
+                        action.setChecked(False)
+                        action.blockSignals(False)
+                        other_setter = getattr(vp, s, None) if vp is not None else None
+                        if callable(other_setter):
+                            other_setter(False)
+            self._on_col_render_option_toggled(setter_name, checked)
+
         for mode, label_text, setter_name, tooltip in col_specs:
             action = render_lod_menu.addAction(label_text)
             action.setCheckable(True)
-            action.setChecked(False)
+            action.setChecked(bool(getattr(
+                getattr(self, 'preview_widget', None), f'show_col_{mode}', False)))
             action.setToolTip(tooltip)
-            action.triggered.connect(
-                lambda checked, s=setter_name: self._on_col_render_option_toggled(s, checked))
+            col_actions.append((action, mode, setter_name))
+        for action, mode, setter_name in col_actions:
+            action.toggled.connect(
+                lambda checked, m=mode, s=setter_name: _on_col_style_toggled(checked, m, s))
 
         render_lod_menu.addSeparator()
 
@@ -25358,42 +21959,50 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         show_tobj_chk.show_toggled.connect(self._on_show_tobj_toggled)
         self._show_tobj_chk = show_tobj_chk
 
-        # Timecyc play/stop toggle (Aug 20 2026, per Keith: "the play
+        # Timecyc play/stop toggle (Aug 20 2026,  "the play
         # and stop for timecyc can be merged with the play stop [2DFX]
         # [TOJB] adding a new button on that line that says [TCYC]")
-        tcyc_chk = _MapOverlayToggleButton("Tcyc", supports_edit=True, icon=OverlayIcons.tcyc_icon(24))
+        tcyc_chk = _MapOverlayToggleButton("Tcyc", supports_edit=False, icon=OverlayIcons.tcyc_icon(24))
+        tcyc_chk.show_toggled.connect(self._on_tcyc_toggled)
+        # Middle-click picks an alternate timecyc.dat (Sep 5 2026, per
+        #  : "If there is more than one timecycle, middle-click
+        # the time cycle button to select it" - was wired to right-
+        # click/edit_toggled, a workaround that predates this button
+        # having its own real middle_clicked signal; every other
+        # similar alternate-picker button (occl/grge/zon) already uses
+        # middle-click, so this brings Tcyc in line with them instead
+        # of being the one exception). set_middle_click_menu_available
+        # sets the real flag mousePressEvent checks before emitting,
+        # but its own tooltip text ("add/delete/save/corner coords")
+        # describes zone/box editing, not file-picking - overridden
+        # with the correct text for this button right after.
+        tcyc_chk.set_middle_click_menu_available(True)
         tcyc_chk.setToolTip(
             "Left-click: play/stop the loaded timecyc file's own day/\n"
             "night sky colour cycle in the 3D view.\n"
-            "Right-click: pick a different timecyc.dat from this\n"
+            "Middle-click: pick a different timecyc.dat from this\n"
             "app's own depends/timecyc/ asset folder.")
-        tcyc_chk.show_toggled.connect(self._on_tcyc_toggled)
-        # Right-click picks an alternate timecyc.dat (Aug 20 2026, per
-        # Keith: "a right-click option to show other timecyc.dat files
-        # that I'll put in an asset folder") - reuses the same generic
-        # edit_toggled "second action" signal every edit-capable
-        # overlay button already has, not a genuine edit mode.
-        tcyc_chk.edit_toggled.connect(lambda checked: self._show_alt_timecyc_menu(tcyc_chk))
+        tcyc_chk.middle_clicked.connect(lambda: self._show_alt_timecyc_menu(tcyc_chk))
         self._tcyc_chk = tcyc_chk
 
         opts_row2.addWidget(show_tobj_chk)
         opts_row2.addWidget(tcyc_chk)
         opts_row2.addWidget(dfx_chk)
-        # time_chk disconnected too (Aug 20 2026, per Keith: "[time]
+        # time_chk disconnected too (Aug 20 2026,  "[time]
         # button is still on the ipl controls, its not needed there as
         # it's on the ribbon instead") - superseding the earlier,
         # narrower call to keep it (which assumed its own TOBJ time-
-        # filtering function was non-redundant) - Keith's own follow-up
+        # filtering function was non-redundant) - my own follow-up
         # confirms this should go too, alongside time_edit.
         # opts_row2.addWidget(time_chk)
         # time_edit disconnected from the visible layout (Aug 20 2026,
-        # per Keith: "The time/clock in IPL controls can be removed
+        #  "The time/clock in IPL controls can be removed
         # since thats on the ribbons / viewpoint") - the on-viewport
         # CRT overlay already shows the current time; this QTimeEdit
         # was now purely redundant with it.
         # opts_row2.addWidget(time_edit)
         # time_play_btn/time_stop_btn/time_settings_btn disconnected
-        # from the visible layout (Aug 20 2026, per Keith: "[TIME]
+        # from the visible layout (Aug 20 2026,  "[TIME]
         # showing the time in the viewpoint like old style green CRT,
         # click on time for stop and start, right click for
         # settings") - the on-viewport CRT overlay's own left/right-
@@ -25445,7 +22054,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         show_occl_btn.set_middle_click_menu_available(True)
         self._show_occl_chk = show_occl_btn
 
-        # Show Garages (Aug 21 2026, per Keith: "add support for GRGE")
+        # Show Garages (Aug 21 2026,  "add support for GRGE")
         show_grge_btn = _MapOverlayToggleButton("Grge", supports_edit=True, icon=OverlayIcons.grge_icon(24))
         show_grge_btn.show_toggled.connect(self._on_show_grge_boxes_toggled)
         show_grge_btn.edit_toggled.connect(self._on_edit_boxes_toggled)
@@ -25474,7 +22083,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         show_auzo_btn.show_toggled.connect(self._on_show_auzo_toggled)
         self._show_auzo_chk = show_auzo_btn
 
-        # Interior filter (Aug 20 2026, per Keith: "Can we look at
+        # Interior filter (Aug 20 2026,  "Can we look at
         # interior values? ... We need a svg to toggle interior
         # models: show 0 only on the viewpoint; showing 0 to 14+ by
         # selecting them") - left-click toggles between the default
@@ -25494,41 +22103,59 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         # Show Water (Aug 20 2026)
         show_water_btn = _MapOverlayToggleButton("Water", supports_edit=True, icon=OverlayIcons.water_icon(24))
         show_water_btn.show_toggled.connect(self._on_show_water_toggled)
-        # Right-click switches water layers (Aug 20 2026, per Keith:
-        # "when you right click the water button, show the other
-        # water layer, right clicking again shows the first") -
-        # reuses the existing right-click/edit_toggled mechanism
-        # every edit-capable overlay button already has (a real,
-        # generic "second boolean state" signal), not a genuine edit
-        # mode for water - tooltip overridden below since the default
-        # one from _MapOverlayToggleButton's own __init__ says "edit
-        # mode", which isn't accurate here.
-        show_water_btn.edit_toggled.connect(self._on_water_layer_toggled)
+        show_water_btn.edit_toggled.connect(lambda _on: self._show_radar_align_dialog())
+        # Middle-click switches water layers (Sep 5 2026, .per:
+        # "the right click toggle between vis_water and phy_water
+        # needs to be moved to the middle button so it doesnt clash
+        # with the right click menu" - was on right-click/edit_
+        # toggled, a simple two-state switch with no menu at all,
+        # which was occupying right-click and blocking a genuine
+        # context menu from ever being added there. supports_edit
+        # dropped too, since nothing here is a real edit mode.
+        show_water_btn.set_middle_click_menu_available(True)
+        show_water_btn.setToolTip(
+            "Left-click: show/hide Water.\n"
+            "Middle-click: switch between visible_map and\n"
+            "physical_map layers (waterpro.dat only).\n"
+            "Right-click: radar/water alignment.")
+        show_water_btn.middle_clicked.connect(
+            lambda: self._on_water_layer_toggled(
+                not getattr(self, '_water2_showing_physical', False)))
         self._show_water_chk = show_water_btn
         # Disabled until real water data is actually preloaded (Aug 20
         # 2026, re-applied) - re-enables itself automatically.
         show_water_btn.setEnabled(False)
         show_water_btn.setToolTip(
             "No water preloaded yet - File > Preload Game Data Files...\n"
-            "Right-click (once preloaded): switch to waterpro.dat's own\n"
+            "Middle-click (once preloaded): switch to waterpro.dat's own\n"
             "other real layer (physical_map, double the resolution).")
 
         # Generate Radar Tiles (Aug 20 2026)
         radar_gen_btn = _MapOverlayToggleButton("Radar", supports_edit=True, icon=OverlayIcons.radar_icon(24))
         radar_gen_btn.set_shown(bool(self.map_settings.get('show_radar_tex_layer')), emit=False)
         radar_gen_btn.show_toggled.connect(self._on_show_radar_tex_layer_toggled)
-        # Right-click generates the radar tiles (Aug 20 2026, per
-        # Keith: "right-clicking the radar button should generate the
-        # radar") - reuses the same real edit_toggled signal every
-        # edit-capable overlay button already has (a generic "second
-        # action" trigger), not a genuine edit mode - the boolean
-        # value itself is ignored, each right-click just re-triggers
-        # generation. Tooltip overridden below since the default
-        # "edit mode" wording isn't accurate here.
-        radar_gen_btn.edit_toggled.connect(lambda checked: self._on_generate_radar_tiles_clicked())
+        # Middle-click generates the radar tiles (Sep 5 2026, moved
+        # off right-click - see below -  "keeping right
+        # click menu, and middle click for other functions"). Was
+        # originally on right-click (Aug 20 2026,  "right-
+        # clicking the radar button should generate the radar"), which
+        # blocked this button's own real context menu
+        # (_on_radar_tiles_context_menu) from ever being reachable.
+        radar_gen_btn.set_middle_click_menu_available(True)
+        radar_gen_btn.middle_clicked.connect(lambda: self._on_generate_radar_tiles_clicked())
+        # Right-click wires up this button's own real context menu
+        # (Send to TXD Workshop/Radar Workshop/Export as RadarTex.img)
+        # - previously completely unreachable, since right-click was
+        # occupied by the simple "generate" action (now on middle-
+        # click instead,  "keeping right click menu, and
+        # middle click for other functions").
+        radar_gen_btn.edit_toggled.connect(
+            lambda checked: self._on_radar_tiles_context_menu(
+                radar_gen_btn, radar_gen_btn.rect().bottomLeft()))
         radar_gen_btn.setToolTip(
             "Left-click: show/hide the radar tex layer.\n"
-            "Right-click: generate radar tiles.")
+            "Middle-click: generate radar tiles.\n"
+            "Right-click: alignment, water fix, send/export options.")
         opts_row4 = QHBoxLayout()
         opts_row4.addWidget(show_sa_nodes_btn)
         opts_row4.addWidget(show_auzo_btn)
@@ -25538,13 +22165,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         lay.addLayout(opts_row4)
 
         # Collected for the display-style toggle (Aug 20 2026, per
-        # Keith: "we could add a toggle in settings, Show IPL Controls
+        #  : "we could add a toggle in settings, Show IPL Controls
         # = as [Buttons] or ribbon icons") - every real overlay toggle
         # button in this dock, so the toggle can apply to all of them
         # at once rather than needing a separate call per button.
         self._overlay_toggle_buttons = [
             dfx_chk, show_tobj_chk, tcyc_chk, show_paths_btn, show_tracks_btn,
-            show_cull_btn, show_zone_btn, show_occl_btn, show_sa_nodes_btn,
+            show_cull_btn, show_zone_btn, show_occl_btn, show_grge_btn, show_sa_nodes_btn,
             show_auzo_btn, show_water_btn, radar_gen_btn, interior_btn,
         ]
         self._apply_ipl_controls_display_style()
@@ -25558,7 +22185,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._ipl_controls_dock = dock
         return dock
 
-    def _get_txd_textures(self, txd_name): #vers 4
+    def _get_txd_textures(self, txd_name): #vers 5
         """Fetch any named TXD's textures from the game's indexed IMG
         archives (gta3.img is always auto-indexed for every game, per
         GTAWorldLoader.load()'s own docstring: "Always enforces
@@ -25576,6 +22203,11 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         entries = getattr(model_cache, '_txd_index', {}).get(key, [])
         archive_paths = "; ".join(dict.fromkeys(img_path for img_path, _entry in entries))
         textures = model_cache.get_textures(txd_name)
+        loader = getattr(self, '_world_loader', None)
+        for parent in (loader.txd_chain(txd_name)[1:] if hasattr(loader, 'txd_chain') else []):
+            inherited = model_cache.get_textures(parent)   # txdp parent, child wins
+            if inherited:
+                textures = {**inherited, **(textures or {})}
         if textures:
             return textures, (archive_paths or "an indexed IMG archive"), 'loaded'
         return (None, (archive_paths or None), 'failed') if entries else (None, None, 'missing')
@@ -25643,7 +22275,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._refresh_ipl_inst_file_panel()
 
     def _on_toggle_mesh_col(self, checked): #vers 1
-        """Toggle Mesh button, repurposed per Keith: "toggle mesh icon
+        """Toggle Mesh button, repurposed  "toggle mesh icon
         can switch between col model and normal model" - checked
         shows the regular model mesh; unchecked hides it and shows
         collision instead (semi-solid, reusing the same real overlay
@@ -25664,6 +22296,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         setter = getattr(vp, setter_name, None) if vp is not None else None
         if callable(setter):
             setter(checked)
+            vp.repaint()
+
+    def _on_toggle_force_prelight(self, checked): #vers 1
+        """Force Prelighting ribbon button toggled (Sep 5 2026, per
+         : "showing dark models... we need a prelighting on/off
+        SVG button")."""
+        vp = getattr(self, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'set_prelight'):
+            vp.set_prelight(checked)
             vp.repaint()
 
     def _on_load_generic_txd_clicked(self): #vers 3
@@ -25716,7 +22357,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             "Rot X", "Rot Y", "Rot Z", "Rot W"]) #TODO need to check Rot w.
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        # Real fix (Aug 21 2026, per Keith's own real, uploaded
+        #  fix (Aug 21 2026  own real, uploaded
         # zon.png screenshot: "clicking the model in the file list
         # window, wants to rename it, not take us to the zon entries
         # that belongs to it") - DoubleClicked as an edit trigger
@@ -25775,7 +22416,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         _on_tobj_time_toggled.
 
         Also syncs timecyc's own hour to this same real, existing
-        game-time state (Aug 20 2026, per Keith: "there appears to be
+        game-time state (Aug 20 2026,  "there appears to be
         another timer running besides the tojb timer") - timecyc used
         to run its own separate QTimer/hour counter, a second,
         redundant "time of day" clock alongside this real, already-
@@ -25791,7 +22432,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(vp, 'set_timecyc_hour'):
             vp.set_timecyc_hour(qtime.hour() + qtime.minute() / 60.0)
-        # CRT overlay text (Aug 20 2026, per Keith: "[TIME] showing
+        # CRT overlay text (Aug 20 2026,  "[TIME] showing
         # the time in the viewpoint like old style green CRT") - same
         # real single hook every other time change already flows
         # through (manual edit or _on_time_flow_tick's own automatic
@@ -25904,7 +22545,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _on_crt_time_clicked(self): #vers 1
         """Left-click on the on-viewport CRT time overlay (Aug 20
-        2026, per Keith: "click on time for stop and start") - toggles
+        2026,  "click on time for stop and start") - toggles
         the same real time-flow timer the old, separate Play/Stop
         buttons already controlled, just from one, unified on-viewport
         control instead. Those old buttons still exist (just no
@@ -25936,7 +22577,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         minutes_spin.valueChanged.connect(on_minutes_change)
         lay.addWidget(minutes_spin)
 
-        lay.addWidget(QLabel("Real seconds per tick"))
+        lay.addWidget(QLabel(" seconds per tick"))
         interval_spin = QDoubleSpinBox()
         interval_spin.setRange(0.1, 60.0)
         interval_spin.setSingleStep(0.5)
@@ -26056,7 +22697,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 table.setItem(r, c, item)
 
     def _play_auzo_placeholder_tone(self, sound_id, name): #vers 2
-        """Play a sound for one audio zone (Aug 20 2026, per Keith:
+        """Play a sound for one audio zone (Aug 20 2026, .per:
         "auzo list play the sounds" / "i can send you the sounds,
         would that help") - the real, in-game San Andreas audio
         itself lives inside the game's own compiled audio bank
@@ -26066,13 +22707,13 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         real sound data anywhere in the loaded IPL/IDE data this
         could actually play on its own.
 
-        Real fix (Aug 20 2026, same real request as above) - checks
+         fix (Aug 20 2026, same real request as above) - checks
         this app's own depends/auzo_sounds/ asset folder first (the
         same real "depends/<name>/" pattern _app_asset_folder already
         shares with timecyc's own asset folder) for a real, actual
-        sound file Keith can drop in - tried by both sound_id and
+        sound file   can drop in - tried by both sound_id and
         zone name, in a few common real audio extensions, since the
-        exact naming convention for whatever files Keith sends isn't
+        exact naming convention for whatever files   sends isn't
         known yet. Falls back to a synthetic sine-wave placeholder
         tone (pitch derived from sound_id, so different zones are at
         least audibly distinguishable from each other even without
@@ -26095,7 +22736,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         real_path = None
         folder = self._app_asset_folder('auzo_sounds')
         if os.path.isdir(folder):
-            # Real fix (Aug 20 2026, per Keith's own uploaded Audiozon.
+            #  fix (Aug 20 2026  own uploaded Audiozon.
             # ipl/AudioEvents.txt, cross-referenced against AUZO_TYPES'
             # own "music description" field - e.g. sound_id 54 -> real
             # radio station "KDST") - the game's own real radio station
@@ -26103,7 +22744,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             # stored as plain, separate stream files in a real SA
             # install's own audio/ folder, not compiled into the same
             # inaccessible bank format - a real, meaningful name like
-            # "KDST.wav" is a far more natural real filename for Keith
+            # "KDST.wav" is a far more natural real filename for  
             # to actually use than the bare numeric sound_id alone.
             music_desc = None
             try:
@@ -26167,7 +22808,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Build the IPL Inst File table from SA's real, already-
         parsed audio zones for this specific IPL (Aug 20 2026).
 
-        Double-click-to-play hint added (Aug 20 2026, per Keith:
+        Double-click-to-play hint added (Aug 20 2026, .per:
         "auzo list play the sounds") - _on_ipl_inst_file_cell_double_
         clicked handles the actual playback; this just makes it
         discoverable."""
@@ -26203,7 +22844,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             for c, value in enumerate(values):
                 table.setItem(r, c, QTableWidgetItem(value))
 
-    def _refresh_ipl_inst_file_panel(self): #vers 3
+    def _refresh_ipl_inst_file_panel(self): #vers 4
         """Re-read the currently selected IPL's raw file content,
         filtered to the currently selected data type (INST/CULL/ZONE -
         PATH is stubbed, never reachable here since its radio button
@@ -26261,6 +22902,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         entry = loader.available_ipls.get(stem) if stem else None
         if entry is None or not entry.exists:
             table.setRowCount(0)
+            return
+        if entry.abs_path.lower().endswith('.wpl'):   # GTA IV binary placements
+            self._populate_wpl_table(table, loader, entry, display_name)
             return
         try:
             with open(entry.abs_path, 'r', encoding='ascii', errors='ignore') as f:
@@ -26397,7 +23041,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     item.setBackground(QBrush(QColor(60, 60, 90)))
                 table.setItem(r, c, item)
 
-    def _on_ipl_inst_file_context_menu(self, pos): #vers 2
+    def _on_ipl_inst_file_context_menu(self, pos): #vers 3
         """Right-click the IPL Inst File table."""
         table = getattr(self, '_ipl_inst_file_table', None)
         if table is None:
@@ -26413,6 +23057,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         info_action = menu.addAction("Info")
         show_textures_action = menu.addAction("Show Textures")
         menu.addSeparator()
+        save_action = menu.addAction("Save IPL")
         save_as_action = menu.addAction("Save IPL Data As...")
         # Path group editing (Aug 16 2026)
         edit_path_group_action = None
@@ -26467,13 +23112,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if inst is not None:
                 self._center_viewport_on_instance(inst)
                 self._center_on_instance(inst)
-        elif chosen is save_as_action:
+        elif chosen in (save_action, save_as_action):
             sections_table = getattr(self, '_ipl_sections_table', None)
             sec_row = sections_table.currentRow() if sections_table is not None else -1
             item = sections_table.item(sec_row, 0) if sec_row >= 0 else None
             display_name = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
             if display_name:
-                self._save_ipl_data_as_full(display_name)
+                if chosen is save_action:
+                    self._save_ipl_in_place(display_name)
+                else:
+                    self._save_ipl_data_as_full(display_name)
         elif chosen is show_textures_action:
             inst = self._find_instance_for_ipl_inst_file_row(row)
             if inst is not None:
@@ -26488,11 +23136,31 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             if resolved_group is not None:
                 self._reverse_path_group_traffic_flow(resolved_group)
 
-    def _find_instance_for_ipl_inst_file_row(self, row): #vers 1
+    def _find_instance_for_ipl_inst_file_row(self, row): #vers 2
         """Look up the real IPLInstance for a row in the IPL Inst File
         table, matched by ID + Model name - factored out of
         _on_ipl_inst_file_cell_double_clicked so the context menu's
-        Info/Show Textures can reuse the same lookup."""
+        Info/Show Textures can reuse the same lookup.
+
+        Also disambiguates by position (Sep 5 2026,  "Could
+        there be a conflict in the functions... where is 146.3 -90
+        146.3 coming from" + "I've noticed some SA IPLs loading in SOL
+        with the wrong data as well... only affects objects loaded in
+        the GTASOL profile") - matching by name+id alone returned
+        whichever instance happened to be first anywhere in the whole
+        loaded world, which is fine for a standalone VC/SA/LC world
+        (a given model_id rarely repeats) but wrong for SOL, which
+        merges multiple cities into one world - common generic models
+        (lcport43, GenVCapsteps1, etc.) legitimately appear dozens of
+        times across different sub-cities, all sharing the same
+        model_id+name. Double-clicking one specific row could silently
+        return a completely different instance's own data instead,
+        including its own different rotation - not a parsing bug at
+        all, which is why it affected both SA- and VC-format objects
+        equally and only ever showed up in SOL. Now reads the row's
+        own Pos X/Y/Z columns (present for 'inst' rows) and picks
+        whichever name+id match sits closest to that real position,
+        rather than just the first one found."""
         table = getattr(self, '_ipl_inst_file_table', None)
         if table is None:
             return None
@@ -26505,13 +23173,28 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         except ValueError:
             target_id = None
         target_model = model_item.text()
-        for inst in getattr(self, '_all_instances', []):
-            if inst.model_name == target_model and (target_id is None or inst.model_id == target_id):
-                return inst
-        for inst in getattr(self, '_all_instances', []):
-            if inst.model_name == target_model:
-                return inst
-        return None
+
+        target_pos = None
+        if getattr(self, '_ipl_data_type', 'inst') == 'inst':
+            px_item, py_item, pz_item = (table.item(row, c) for c in (3, 4, 5))
+            if px_item is not None and py_item is not None and pz_item is not None:
+                try:
+                    target_pos = (float(px_item.text()), float(py_item.text()), float(pz_item.text()))
+                except ValueError:
+                    target_pos = None
+
+        candidates = [inst for inst in getattr(self, '_all_instances', [])
+                      if inst.model_name == target_model
+                      and (target_id is None or inst.model_id == target_id)]
+        if not candidates:
+            candidates = [inst for inst in getattr(self, '_all_instances', [])
+                          if inst.model_name == target_model]
+        if not candidates:
+            return None
+        if len(candidates) == 1 or target_pos is None:
+            return candidates[0]
+        tx, ty, tz = target_pos
+        return min(candidates, key=lambda i: (i.pos_x-tx)**2 + (i.pos_y-ty)**2 + (i.pos_z-tz)**2)
 
     def _find_path_group_for_line(self, display_name, line_no): #vers 1
         """Find the real, live PathGroup a clicked IPL File Display
@@ -26688,19 +23371,19 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._center_viewport_on_instance(match)
             self._center_on_instance(match)
 
-    def _on_ipl_inst_file_cell_double_clicked(self, row, col): #vers 4
+    def _on_ipl_inst_file_cell_double_clicked(self, row, col): #vers 5
         """Double-clicking the Model column (1) finds that row's real
         instance and jumps the viewport to it + opens its edit panel,
         matching double-clicking a row in the Instance List.
 
-        Real fix (Aug 20 2026, per Keith: "auzo list play the sounds")
+         fix (Aug 20 2026,  "auzo list play the sounds")
         - the Auzo table's own columns (Name/Sound ID/Switch/Shape/...)
         are nothing like the Inst table's own Model-at-column-1 layout
         the col != 1 guard below assumes, so this real Auzo case is
         checked and handled first, before that guard would otherwise
         block it entirely.
 
-        Real fix (Aug 21 2026, per Keith's own real, uploaded zon.png
+         fix (Aug 21 2026  own real, uploaded zon.png
         screenshot: "wants to rename it, not take us to the zon
         entries that belongs to it") - the actual "wants to rename"
         symptom was a real, separate table-setup bug fixed above (see
@@ -26708,7 +23391,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         not this handler. But this real handler itself only ever
         centered the viewport on the instance - never actually looked
         for a real zone the instance's own position falls inside, the
-        real behaviour Keith's own message describes wanting instead.
+        real behaviour my own message describes wanting instead.
         Now also does that: finds the first loaded zone box whose own
         real (min/max) bounds contain the instance's own real (x,y)
         position, and highlights it the same real way the Cycle Zones
@@ -26739,7 +23422,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Find the first loaded zone box whose own real bounds
         contain inst's own real (x,y) position, and highlight it the
         same real way the Cycle Zones button's own picker does (Aug
-        21 2026, per Keith's own real, uploaded zon.png screenshot:
+        21 2026  own real, uploaded zon.png screenshot:
         "not take us to the zon entries that belongs to it"). Doesn't
         re-center the viewport (the caller already did that, on the
         instance itself) - only sets the real highlight state, so
@@ -26761,19 +23444,33 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 self._set_status(f"Instance is inside zone '{name}'")
                 return
 
-    def _center_viewport_on_instance(self, inst): #vers 3
+    def _center_viewport_on_instance(self, inst): #vers 4
         """Pan/zoom self.preview_widget (our actual active viewport)
         to focus closely on one instance's position - _center_on_
         instance (existing, ported code) only ever updated the
         Map-specific _world_panes, which this build doesn't use (see
         CHANGELOG.md - "keep using Model Workshop's existing DFF
-        viewport"), so it never actually moved anything visible here."""
+        viewport"), so it never actually moved anything visible here.
+
+        focus_from_above (Sep 5 2026,  "when selecting a
+        model in map workshop, can we change the camera view, have a
+        setting, view from 0, +200 so we dont view the model from the
+        bottom, we see it from the top instead") - off by default;
+        when on, also resets yaw/pitch to a fixed from-above angle
+        rather than leaving whatever angle the camera already
+        happened to be at, which could be looking up from
+        underneath the model."""
         vp = getattr(self, 'preview_widget', None)
         if vp is None:
             return
         vp._pan_x = -inst.pos_x
         vp._pan_y = -inst.pos_y
-        vp._dist = getattr(self, '_goto_zoom_distance', 40.0)
+        if self.map_settings.get('focus_from_above', False):
+            vp._yaw = 0.0
+            vp._pitch = 89.0
+            vp._dist = self.map_settings.get('focus_from_above_dist', 200.0)
+        else:
+            vp._dist = getattr(self, '_goto_zoom_distance', 40.0)
         if getattr(vp, '_projection', None) == 'ortho':
             try:
                 vp.resizeGL(vp.width(), vp.height())
@@ -26796,7 +23493,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _on_path_node_picked(self, node_pos, owner): #vers 1
         """Called by DFFViewport.mouseDoubleClickEvent when the user
         double-clicks a path node in the 3D world view (Aug 21 2026,
-        per Keith: "when clicking on paths, or zons, other then ipl
+         "when clicking on paths, or zons, other then ipl
         models, nothing comes up") - centers the viewport on the node
         (same real feedback double-clicking a regular instance already
         gives) and reports its own real data via the status bar, since
@@ -26825,16 +23522,16 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _on_cull_or_zone_box_picked(self, kind, box_index): #vers 3
         """Called by DFFViewport.mouseDoubleClickEvent when the user
         double-clicks a cull/zone/occlusion box in the 3D world view
-        (Aug 21 2026, per Keith: "when clicking on paths, or zons,
+        (Aug 21 2026,  "when clicking on paths, or zons,
         other then ipl models, nothing comes up"; occl added same day
-        per Keith's own follow-up "both if you can") - centers the
+        per my own follow-up "both if you can") - centers the
         viewport on the box (same real feedback double-clicking a
         regular instance already gives) and reports its own real data
         via the status bar, since none of the three have a dedicated
         edit dialog of their own yet beyond corner-drag resizing (cull/
         zone only - see TODO.md).
 
-        Also sets the real box highlight (Aug 21 2026, per Keith's
+        Also sets the real box highlight (Aug 21 2026 
         own follow-up "show the zon box highlighted") - the same real
         state the Cycle Zones button's own left-click/right-click
         picker set, so a direct 3D double-click and the fallback
@@ -26919,7 +23616,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 [('grge', i) for i in range(len(getattr(vp, '_grge_boxes', [])))])
 
     def _cycle_selected_box(self): #vers 1
-        """Cycle Zones button, left-click (Aug 21 2026, per Keith: "on
+        """Cycle Zones button, left-click (Aug 21 2026,  "on
         zons we could also cycle through the entries list, and show
         the zon box highlighted... this would be a failback, other
         then clicking on the zon box") - steps to the next cull/zone
@@ -26940,9 +23637,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._on_cull_or_zone_box_picked(kind, box_index)
 
     def _show_box_picker_menu(self, cycle_btn): #vers 3
-        """Cycle Zones button, right-click (Aug 21 2026, per Keith's
+        """Cycle Zones button, right-click (Aug 21 2026 
         own follow-up: "with right click options, this would be a
-        failback"; occl/grge added same day per Keith's own follow-up
+        failback"; occl/grge added same day per my own follow-up
         "both if you can") - lists every real cull/zone/occlusion/
         garage box currently loaded, by real name where one exists
         (zones, garages) or index (cull/occl, neither has a name
@@ -26974,7 +23671,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _box_corners_3d(self, kind, box_index): #vers 1
         """Return all 8 real (x,y,z) corners of one box, any type
-        (Aug 21 2026, per Keith: "add show coords for all corners") -
+        (Aug 21 2026,  "add show coords for all corners") -
         or None if the index doesn't resolve. Cull/zone/grge are a
         plain AABB, so this is just the 2x2x2 combination of their
         own (x1/x2, y1/y2, z1/z2); occlusion is rotated, so its own 4
@@ -27007,7 +23704,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _show_box_corner_coords(self, kind, box_index): #vers 1
         """Show every real (x,y,z) corner of one box in a plain
-        message box (Aug 21 2026, per Keith: "add show coords for all
+        message box (Aug 21 2026,  "add show coords for all
         corners") - available from any overlay button's own middle-
         click menu, for whichever box is currently selected there."""
         corners = self._box_corners_3d(kind, box_index)
@@ -27024,14 +23721,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _show_overlay_middle_click_menu(self, kind, add_fn, delete_fn, save_fn): #vers 2
         """Build and show one overlay button's own middle-click menu
-        (Aug 21 2026, per Keith: "the new buttons, +zon, -zon, and
+        (Aug 21 2026,  "the new buttons, +zon, -zon, and
         save zon... add these to the svg icon zon button with a
         middle-click, and move those functions over. Same with cull,
         occl, auzo, grge") - one real, shared menu-builder rather than
         4 near-identical copies, parameterized by which real add/
         delete/save methods this particular box type actually uses.
 
-        Real fix (Aug 21 2026, per Keith: "Show coords does not work
+         fix (Aug 21 2026,  "Show coords does not work
         on occl, zon or cull?") - "Show Corner Coordinates" used to
         only ever enable once a box of this exact type was already
         the one selected via Cycle Zones - genuinely disabled/inert
@@ -27076,34 +23773,32 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         pos = btn.mapToGlobal(btn.rect().bottomLeft()) if btn is not None else self.mapToGlobal(self.rect().center())
         menu.exec(pos)
 
-    def _repair_zero_scale_instances(self): #vers 1
-        """Repair Scale button - fixes every currently loaded instance
-        whose own real scale is exactly (0,0,0) back to (1,1,1) (Aug
-        21 2026, per Keith's own real, worked VC/SA/SOL example lines
-        and a real, broken converted line: "so we need a function to
-        find and change 1, 1, 1, to 0, 0, 0" - the real, worked
-        example itself confirms a real zero scale is what's actually
-        broken, not the other direction, since a real, valid VC
-        instance always has scale (1,1,1) unless deliberately, non-
-        zero-scaled). IN MEMORY ONLY - no write-back to disk for INST
-        lines exists yet (see this button's own tooltip/the ribbon
-        comment above it), so this fixes what Keith sees in the
-        viewport but not yet the file itself."""
+    def _repair_scale_instances(self, from_scale, to_scale): #vers 1
+        """Generic version of Repair Scale - fixes every currently
+        loaded instance whose scale is exactly `from_scale` to
+        `to_scale`. Backs both directions on the Repair Scale ribbon
+        button (Sep 5 2026,  "add another option 1, 1, 1,
+        to 0, 0, 0") - the original 0,0,0 -> 1,1,1 direction (Aug 21
+        2026  own real worked VC/SA/SOL example) plus its
+        exact reverse. IN MEMORY ONLY - no write-back to disk for
+        INST lines exists yet, same as before."""
         loader = getattr(self, '_world_loader', None)
         if loader is None:
             self._set_status("No world loaded")
             return
         instances = getattr(loader, 'instances', [])
+        fx, fy, fz = from_scale
+        tx, ty, tz = to_scale
         broken = [inst for inst in instances
-                  if inst.scale_x == 0.0 and inst.scale_y == 0.0 and inst.scale_z == 0.0]
+                  if inst.scale_x == fx and inst.scale_y == fy and inst.scale_z == fz]
         if not broken:
-            self._set_status("No zero-scale instances found")
+            self._set_status(f"No {from_scale} scale instances found")
             return
         originals = [(inst.scale_x, inst.scale_y, inst.scale_z) for inst in broken]
 
         def _do_fix():
             for inst in broken:
-                inst.scale_x, inst.scale_y, inst.scale_z = 1.0, 1.0, 1.0
+                inst.scale_x, inst.scale_y, inst.scale_z = tx, ty, tz
             self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=True)
 
         def _do_undo():
@@ -27112,17 +23807,49 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=True)
 
         _do_fix()
-        self._push_map_undo(_do_undo, _do_fix, f"Repair {len(broken)} zero-scale instance(s)")
-        self._set_status(f"Repaired {len(broken)} zero-scale instance(s) - not yet saved to disk")
+        self._push_map_undo(_do_undo, _do_fix,
+            f"Repair {len(broken)} instance(s) {from_scale}->{to_scale}")
+        self._set_status(
+            f"Repaired {len(broken)} instance(s) {from_scale}->{to_scale} - not yet saved to disk")
+
+    def _repair_zero_scale_instances(self): #vers 2
+        """Repair Scale button, default direction: 0,0,0 -> 1,1,1
+        (Aug 21 2026  own real, worked VC/SA/SOL example
+        lines and a real, broken converted line - the real, worked
+        example itself confirms a real zero scale is what's actually
+        broken, not the other direction, since a real, valid VC
+        instance always has scale (1,1,1) unless deliberately, non-
+        zero-scaled)."""
+        self._repair_scale_instances((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+
+    def _repair_one_scale_instances(self): #vers 1
+        """Repair Scale button, reverse direction: 1,1,1 -> 0,0,0
+        (Sep 5 2026,  "add another option 1, 1, 1, to 0, 0,
+        0") - for IPL data converted the other way round, where a
+        genuinely-zero scale got mapped to (1,1,1) instead."""
+        self._repair_scale_instances((1.0, 1.0, 1.0), (0.0, 0.0, 0.0))
+
+    def _show_repair_scale_menu(self, btn): #vers 1
+        """Right-click menu for Repair Scale - pick which direction to
+        repair (Sep 5 2026), same right-click-for-options convention
+        already used by Cycle/Convert on this same ribbon."""
+        menu = QMenu(self)
+        act_0to1 = menu.addAction("Repair 0,0,0 -> 1,1,1")
+        act_1to0 = menu.addAction("Repair 1,1,1 -> 0,0,0")
+        chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+        if chosen is act_0to1:
+            self._repair_zero_scale_instances()
+        elif chosen is act_1to0:
+            self._repair_one_scale_instances()
 
     def _add_zone(self): #vers 1
-        """Add a new zone entry, per Keith: "we need to finish the
+        """Add a new zone entry,  "we need to finish the
         add, del, save functions for zon" (Aug 21 2026) - IN MEMORY
         ONLY until Save Zones is used (see _write_back_zone_section
         below). Placed as a small (20x20x10) box centred on wherever
         the viewport is currently looking, in the first currently-
         loaded zone source file found (loader.zones' own source_ipl,
-        Keith's own "add" request has no way to ask which file a
+        my own "add" request has no way to ask which file a
         brand new zone should belong to, so this is a reasonable,
         visible default rather than silently picking nothing at
         all) - source_ipl can be changed later by editing the zone's
@@ -27157,12 +23884,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(f"Added zone '{new_zone['name']}' - not yet saved to disk")
 
     def _delete_zone(self): #vers 1
-        """Delete the currently cycled/selected zone, per Keith:
+        """Delete the currently cycled/selected zone, .per:
         "we need to finish the add, del, save functions for zon" (Aug
         21 2026) - IN MEMORY ONLY until Save Zones is used. Acts on
         whichever zone the Cycle Zones button (or a direct viewport
         double-click) last selected (preview_widget._selected_box) -
-        cull boxes have no delete support here since Keith's own
+        cull boxes have no delete support here since my own
         request named zon specifically."""
         loader = getattr(self, '_world_loader', None)
         vp = getattr(self, 'preview_widget', None)
@@ -27192,7 +23919,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(f"Deleted zone '{removed_name}' - not yet saved to disk")
 
     def _add_cull(self): #vers 1
-        """Add a new cull box, per Keith: "lets build add, del for
+        """Add a new cull box,  "lets build add, del for
         zon, cull, occu and ipl changes" (Aug 21 2026) - IN MEMORY
         ONLY until Save Cull Zones is used. Placed as a small (20x20x
         10) box centred on wherever the viewport is currently
@@ -27228,7 +23955,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status("Added cull box - not yet saved to disk")
 
     def _delete_cull(self): #vers 1
-        """Delete the currently cycled/selected cull box, per Keith:
+        """Delete the currently cycled/selected cull box, .per:
         "lets build add, del for zon, cull, occu and ipl changes"
         (Aug 21 2026) - IN MEMORY ONLY until Save Cull Zones is used.
         Acts on whichever cull box the Cycle Zones button (or a
@@ -27262,7 +23989,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _write_back_cull_section(self, abs_path, cull_entries, game): #vers 1
         """Write a real "cull...end" section back to its own real IPL
-        file on disk (Aug 21 2026, per Keith: "lets build add, del
+        file on disk (Aug 21 2026,  "lets build add, del
         for zon, cull, occu and ipl changes") - same real replace-
         only-that-section/keep-everything-else/write-a-.bak-first
         approach as _write_back_zone_section (see its own docstring
@@ -27272,7 +23999,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         ever stores the resolved (x1,y1,z1,x2,y2,z2) axis-aligned
         bounding box, not the original center/length/width/skew
         fields a real SA cull line actually has (see _parse_cull's
-        own docstring for the full, real confirmed-against-Keith's-
+        own docstring for the full, real confirmed-against-my-
         real-file story) - a real skewed zone's own skew is genuinely
         lost on write-back, reconstructed here as an unskewed
         (Unknown1=Unknown2=0) box of the same real overall size
@@ -27282,7 +24009,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         names for reading."""
         from apps.methods.gta_dat_parser import GTAGame
         try:
-            with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
+            with open(abs_path, 'r', encoding='latin-1', newline='') as f:
                 lines = f.readlines()
         except Exception as e:
             return False, f"Couldn't read {abs_path}: {e}"
@@ -27298,7 +24025,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         new_lines = []
         for c in cull_entries:
-            # Real fix (Aug 21 2026, per Keith: "when loading SOL, are
+            #  fix (Aug 21 2026,  "when loading SOL, are
             # you using the SA parser or VC parser?") - SOL is its own,
             # distinct GTAGame value, so this never matched it despite
             # SOL running on the SA engine with SA-format IPL sections
@@ -27326,19 +24053,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 lines[-1] += '\n'
             lines += ['cull\n'] + new_lines + ['end\n']
 
-        backup_path = abs_path + '.bak'
-        if not os.path.isfile(backup_path):
-            try:
-                with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                    original = f.read()
-                with open(backup_path, 'w', encoding='ascii', errors='ignore') as f:
-                    f.write(original)
-            except Exception as e:
-                return False, f"Couldn't write backup for {abs_path}: {e}"
-
         try:
-            with open(abs_path, 'w', encoding='ascii', errors='ignore') as f:
-                f.writelines(lines)
+            _write_ipl_lines(abs_path, lines)      # timestamped backup + atomic write, CRLF kept
         except Exception as e:
             return False, f"Couldn't write {abs_path}: {e}"
         return True, f"Wrote {len(cull_entries)} cull box(es) to {os.path.basename(abs_path)}"
@@ -27346,7 +24062,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _save_culls(self): #vers 1
         """Save Cull Zones button - writes every currently loaded cull
         box back to its own real source IPL file(s) on disk (Aug 21
-        2026, per Keith: "lets build add, del for zon, cull, occu and
+        2026,  "lets build add, del for zon, cull, occu and
         ipl changes"). Same real grouping/resolve/confirm/write
         pattern as _save_zones (see its own docstring)."""
         loader = getattr(self, '_world_loader', None)
@@ -27392,7 +24108,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status(f"Saved {len(culls)} cull box(es) across {written} file(s)")
 
     def _add_occl(self): #vers 1
-        """Add a new occlusion box, per Keith: "lets build add, del
+        """Add a new occlusion box,  "lets build add, del
         for zon, cull, occu and ipl changes" / "both if you can" (Aug
         21 2026) - IN MEMORY ONLY until Save Occlusion is used. Placed
         as a small, unrotated (20x20x10) box centred on wherever the
@@ -27427,7 +24143,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _delete_occl(self): #vers 1
         """Delete the currently cycled/selected occlusion box, per
-        Keith: "lets build add, del for zon, cull, occu and ipl
+         : "lets build add, del for zon, cull, occu and ipl
         changes" / "both if you can" (Aug 21 2026) - IN MEMORY ONLY
         until Save Occlusion is used. Acts on whichever occlusion box
         the Cycle Zones button (or a direct viewport double-click)
@@ -27460,7 +24176,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _write_back_occl_section(self, abs_path, occl_entries): #vers 1
         """Write a real "occl...end" section back to its own real IPL
-        file on disk (Aug 21 2026, per Keith: "lets build add, del
+        file on disk (Aug 21 2026,  "lets build add, del
         for zon, cull, occu and ipl changes" / "both if you can") -
         same real replace-only-that-section/keep-everything-else/
         write-a-.bak-first approach as _write_back_zone_section (see
@@ -27470,7 +24186,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         across every real game this parser handles, unlike cull - no
         game-specific branching needed here."""
         try:
-            with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
+            with open(abs_path, 'r', encoding='latin-1', newline='') as f:
                 lines = f.readlines()
         except Exception as e:
             return False, f"Couldn't read {abs_path}: {e}"
@@ -27498,19 +24214,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 lines[-1] += '\n'
             lines += ['occl\n'] + new_lines + ['end\n']
 
-        backup_path = abs_path + '.bak'
-        if not os.path.isfile(backup_path):
-            try:
-                with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                    original = f.read()
-                with open(backup_path, 'w', encoding='ascii', errors='ignore') as f:
-                    f.write(original)
-            except Exception as e:
-                return False, f"Couldn't write backup for {abs_path}: {e}"
-
         try:
-            with open(abs_path, 'w', encoding='ascii', errors='ignore') as f:
-                f.writelines(lines)
+            _write_ipl_lines(abs_path, lines)      # timestamped backup + atomic write, CRLF kept
         except Exception as e:
             return False, f"Couldn't write {abs_path}: {e}"
         return True, f"Wrote {len(occl_entries)} occlusion box(es) to {os.path.basename(abs_path)}"
@@ -27518,7 +24223,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _save_occls(self): #vers 1
         """Save Occlusion button - writes every currently loaded
         occlusion box back to its own real source IPL file(s) on disk
-        (Aug 21 2026, per Keith: "lets build add, del for zon, cull,
+        (Aug 21 2026,  "lets build add, del for zon, cull,
         occu and ipl changes" / "both if you can"). Same real
         grouping/resolve/confirm/write pattern as _save_zones/_save_
         culls (see their own docstrings)."""
@@ -27561,18 +24266,18 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status(f"Saved {len(occls)} occlusion box(es) across {written} file(s)")
 
     def _add_grge(self): #vers 2
-        """Add a new garage, per Keith: "add support for GRGE" / "lets
+        """Add a new garage,  "add support for GRGE" / "lets
         build add, del for zon, cull, occu and ipl changes" / "both if
         you can" (Aug 21 2026) - IN MEMORY ONLY until Save Garages is
-        used. Placed as a small (14x23x6, matching Keith's own real
+        used. Placed as a small (14x23x6, matching my own real
         example garages' own typical size) box centred on wherever
         the viewport is currently looking, in the first currently-
         loaded garage source file found (same real "no way to ask
         which file" reasoning as _add_zone/_add_cull/_add_occl).
 
-        Real fix (Aug 21 2026, per Keith's own real, uploaded GRGE
+         fix (Aug 21 2026  own real, uploaded GRGE
         example lines) - front_x/x2/front_y now follow the same real
-        field convention every one of Keith's own real garage lines
+        field convention every one of my own real garage lines
         actually uses (see _refresh_grge_box_visualization's own
         docstring for the full, confirmed real field meaning):
         front_x holds the box's own real second X corner, front_y
@@ -27607,7 +24312,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._set_status(f"Added garage '{new_grge.name}' - not yet saved to disk")
 
     def _delete_grge(self): #vers 1
-        """Delete the currently cycled/selected garage, per Keith:
+        """Delete the currently cycled/selected garage, .per:
         "add support for GRGE" / "lets build add, del for zon, cull,
         occu and ipl changes" / "both if you can" (Aug 21 2026) - IN
         MEMORY ONLY until Save Garages is used. Acts on whichever
@@ -27642,17 +24347,17 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _write_back_grge_section(self, abs_path, grge_entries): #vers 1
         """Write a real "grge...end" section back to its own real IPL
-        file on disk (Aug 21 2026, per Keith: "add support for GRGE" /
+        file on disk (Aug 21 2026,  "add support for GRGE" /
         "lets build add, del for zon, cull, occu and ipl changes" /
         "both if you can") - same real replace-only-that-section/
         keep-everything-else/write-a-.bak-first approach as _write_
         back_zone_section (see its own docstring for the full, real
         safety reasoning, identical here). Garage names aren't quoted
-        on write-back - Keith's own real example data (see GrgeEntry's
+        on write-back - my own real example data (see GrgeEntry's
         own docstring) shows plain, unquoted names ("cjsafe"), not
         SannyBuilder-style quoted strings."""
         try:
-            with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
+            with open(abs_path, 'r', encoding='latin-1', newline='') as f:
                 lines = f.readlines()
         except Exception as e:
             return False, f"Couldn't read {abs_path}: {e}"
@@ -27681,122 +24386,32 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 lines[-1] += '\n'
             lines += ['grge\n'] + new_lines + ['end\n']
 
-        backup_path = abs_path + '.bak'
-        if not os.path.isfile(backup_path):
-            try:
-                with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                    original = f.read()
-                with open(backup_path, 'w', encoding='ascii', errors='ignore') as f:
-                    f.write(original)
-            except Exception as e:
-                return False, f"Couldn't write backup for {abs_path}: {e}"
-
         try:
-            with open(abs_path, 'w', encoding='ascii', errors='ignore') as f:
-                f.writelines(lines)
+            _write_ipl_lines(abs_path, lines)      # timestamped backup + atomic write, CRLF kept
         except Exception as e:
             return False, f"Couldn't write {abs_path}: {e}"
         return True, f"Wrote {len(grge_entries)} garage(s) to {os.path.basename(abs_path)}"
 
-    def _detect_inst_field_game(self, parts): #vers 1
-        """Guess which game an already-split INST line's own fields
-        belong to, from field count alone (Aug 21 2026, per Keith:
-        "having VC -> SA or SA -> VC is something I need... selected
-        ipl files to convert, anywhere on the harddrive") - VC's own
-        real, confirmed layout always has 13 fields (scale+rotation);
-        SA/SOL's has 10 (no lod) or 11 (with lod). Returns GTAGame.VC,
-        GTAGame.SA, or None if the count matches neither real, known
-        layout."""
-        from apps.methods.gta_dat_parser import GTAGame
-        n = len(parts)
-        if n == 13:
-            return GTAGame.VC
-        if n in (10, 11):
-            return GTAGame.SA
-        return None
-
-    def _convert_ipl_inst_section(self, abs_path, to_game, from_game=None): #vers 1
-        """Convert every real INST line in one real IPL file to
-        to_game's own real field layout, in place (Aug 21 2026, per
-        Keith: "having VC -> SA or SA -> VC is something I need,
-        under a conversion SVG icon, right clicked for options, and
-        selected ipl files to convert, anywhere on the harddrive or
-        loaded ipl browser list"). Only real INST lines are touched -
-        every other real line (other sections, comments) is left
-        completely untouched. from_game auto-detected per real INST
-        section found (_detect_inst_field_game, from real field count)
-        when not given directly - handles a real file with more than
-        one real INST section, each independently, in case they
-        somehow differ (shouldn't in practice, but not assumed).
-        Writes a real .bak backup first (only if one doesn't already
-        exist). Returns (success: bool, message: str)."""
-        from apps.methods.gta_dat_parser import convert_inst_fields, GTAGame
+    def _convert_ipl_inst_section(self, abs_path, to_game): #vers 2
+        """Convert an IPL's INST lines to to_game's layout in place (backup kept)."""
+        from apps.components.Map_Editor.depends.ipl_format_check import rewrite_ipl
+        action = {'vc': 'to_vc', 'gta3': 'to_iii'}.get(to_game, 'to_sa')
         try:
-            with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                lines = f.readlines()
+            n = rewrite_ipl(abs_path, action)
         except Exception as e:
-            return False, f"Couldn't read {abs_path}: {e}"
-
-        new_lines = []
-        in_inst = False
-        section_from_game = from_game
-        converted, skipped = 0, 0
-        for raw in lines:
-            stripped = raw.split('#')[0].strip()
-            if not in_inst and stripped.lower() == 'inst':
-                in_inst = True
-                section_from_game = from_game
-                new_lines.append(raw)
-                continue
-            if in_inst and stripped.lower() == 'end':
-                in_inst = False
-                new_lines.append(raw)
-                continue
-            if in_inst and stripped and not stripped.startswith('#'):
-                parts = [p.strip() for p in stripped.split(',')]
-                if section_from_game is None:
-                    section_from_game = self._detect_inst_field_game(parts)
-                if section_from_game is not None and section_from_game != to_game:
-                    result = convert_inst_fields(parts, section_from_game, to_game)
-                    if result is not None:
-                        new_lines.append(', '.join(result) + '\n')
-                        converted += 1
-                        continue
-                new_lines.append(raw)
-                skipped += 1
-                continue
-            new_lines.append(raw)
-
-        if converted == 0:
-            return False, f"No convertible INST lines found in {os.path.basename(abs_path)}"
-
-        backup_path = abs_path + '.bak'
-        if not os.path.isfile(backup_path):
-            try:
-                with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                    original = f.read()
-                with open(backup_path, 'w', encoding='ascii', errors='ignore') as f:
-                    f.write(original)
-            except Exception as e:
-                return False, f"Couldn't write backup for {abs_path}: {e}"
-
-        try:
-            with open(abs_path, 'w', encoding='ascii', errors='ignore') as f:
-                f.writelines(new_lines)
-        except Exception as e:
-            return False, f"Couldn't write {abs_path}: {e}"
-        suffix = f", {skipped} left unconverted" if skipped else ""
-        return True, f"Converted {converted} INST line(s) in {os.path.basename(abs_path)}{suffix}"
+            return False, f"Couldn't convert {abs_path}: {e}"
+        if n == 0:
+            return False, f"No INST lines needed converting in {os.path.basename(abs_path)}"
+        return True, f"Converted {n} INST line(s) in {os.path.basename(abs_path)}"
 
     def _convert_ipl_files_dialog(self, to_game): #vers 1
-        """Convert IPL File(s) From Disk... - lets Keith pick any real
+        """Convert IPL File(s) From Disk... - lets   pick any real
         .ipl file(s) anywhere on the hard drive and convert their own
         real INST sections to to_game's own real layout (Aug 21 2026,
-        per Keith: "selected ipl files to convert, anywhere on the
+         "selected ipl files to convert, anywhere on the
         harddrive"). Confirms first, since this genuinely changes real
         files on disk (with a real .bak backup, but still a real,
         deliberate action)."""
-        from apps.methods.gta_dat_parser import GTAGame
         paths, _ = QFileDialog.getOpenFileNames(
             self, f"Select IPL file(s) to convert to {to_game.upper()}",
             "", "IPL Files (*.ipl);;All Files (*)")
@@ -27813,9 +24428,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._run_ipl_inst_conversion(paths, to_game)
 
     def _convert_loaded_ipls_dialog(self, to_game): #vers 1
-        """Convert Loaded IPL(s)... - lets Keith pick from whichever
+        """Convert Loaded IPL(s)... - lets   pick from whichever
         real IPL files the currently-loaded world actually came from
-        (Aug 21 2026, per Keith: "...or loaded ipl browser list"),
+        (Aug 21 2026,  "...or loaded ipl browser list"),
         rather than only browsing the hard drive blind. Lists every
         real path from loader.load_log (every real loaded IPL is
         already recorded there)."""
@@ -27877,9 +24492,20 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         else:
             self._set_status(f"Converted {converted} file(s) to {to_game.upper()}")
 
-    def _show_convert_ipl_menu(self, button): #vers 1
+    def _show_ipl_format_checker(self): #vers 1
+        """Scan world IPLs for layout / scale / bad lines; fix or convert them."""
+        from apps.components.Map_Editor.depends.ipl_format_check import IPLFormatDialog
+        loader = getattr(self, '_world_loader', None)
+        paths = []
+        if loader is not None:
+            paths = [e.abs_path for e in getattr(loader, 'available_ipls', {}).values()
+                     if getattr(e, 'exists', False)]
+            paths += [e[2] for e in getattr(loader, 'load_log', []) if len(e) >= 3 and e[1] == 'IPL']
+        IPLFormatDialog(self, sorted(set(paths))).exec()
+
+    def _show_convert_ipl_menu(self, button): #vers 2
         """Convert button, left or right-click (Aug 21 2026, per
-        Keith: "having VC -> SA or SA -> VC is something I need,
+         : "having VC -> SA or SA -> VC is something I need,
         under a convertion SVG icon, right clicked for options, and
         selected ipl files to convert, anywhere on the harddrive or
         loaded ipl browser list") - both real source paths (disk
@@ -27887,6 +24513,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         formats."""
         from apps.methods.gta_dat_parser import GTAGame
         menu = QMenu(self)
+        menu.addAction("IPL Format Checker...", self._show_ipl_format_checker)
+        menu.addSeparator()
         menu.addAction("Convert File(s) From Disk to SA/SOL...",
                         lambda: self._convert_ipl_files_dialog(GTAGame.SA))
         menu.addAction("Convert File(s) From Disk to VC...",
@@ -27899,7 +24527,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
     def _optimize_dat_load_order_clicked(self): #vers 1
-        """Optimize Order button (Aug 21 2026, per Keith: "if the
+        """Optimize Order button (Aug 21 2026,  "if the
         model names, col names, and ide/ipl entries loaded in the
         same order the game spends less work matching them up, result
         is the game loads and renders faster") - reorders the
@@ -27948,10 +24576,73 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         else:
             self._set_status(f"Reordered {done} .dat file(s) - reload the world to see the new order")
 
+    def _show_model_search_dialog(self): #vers 1
+        """Search loaded instances by model name (Sep 5 2026, per
+         : "a search [O'] function on the ribbon bar to find a
+        model name so I can see the IPL line") - live-filtered as you
+        type, one row per unique model name with its own placement
+        count. Double-click jumps to it the exact same way clicking a
+        model in the Object Browser already does (_current_model_
+        instances/_current_instance_index set the same way, so Prev/
+        Next cycling through that model's own other placements
+        continues to work correctly afterward, same real fix as
+        _find_instance_for_ipl_inst_file_row's own position-based
+        disambiguation just made for the IPL File Display table)."""
+        all_instances = getattr(self, '_all_instances', [])
+        if not all_instances:
+            self._set_status("No world loaded")
+            return
+
+        by_name = {}
+        for inst in all_instances:
+            by_name.setdefault(inst.model_name, []).append(inst)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Search Loaded Instances")
+        dlg.resize(420, 480)
+        lay = QVBoxLayout(dlg)
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("Type a model name...")
+        lay.addWidget(search_edit)
+        results = QListWidget()
+        lay.addWidget(results, 1)
+        info_lbl = QLabel("")
+        lay.addWidget(info_lbl)
+
+        def _refresh(text):
+            results.clear()
+            text_lower = text.strip().lower()
+            names = sorted(by_name.keys())
+            if text_lower:
+                names = [n for n in names if text_lower in n.lower()]
+            for name in names[:500]:   # cap - a handful of chars usually narrows this down fast
+                count = len(by_name[name])
+                item = QListWidgetItem(f"{name}  ({count} placement{'s' if count != 1 else ''})")
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                results.addItem(item)
+            info_lbl.setText(f"{len(names)} model name(s) match" if text_lower else
+                              f"{len(names)} unique model name(s) loaded - type to filter")
+
+        def _jump_to(item):
+            name = item.data(Qt.ItemDataRole.UserRole)
+            instances = by_name.get(name, [])
+            if not instances:
+                return
+            self._current_model_instances = instances
+            self._current_instance_index = 0
+            self._center_on_instance(instances[0], nav_info=(0, len(instances)))
+            dlg.accept()
+
+        search_edit.textChanged.connect(_refresh)
+        results.itemDoubleClicked.connect(_jump_to)
+        _refresh("")
+        search_edit.setFocus()
+        dlg.exec()
+
     def _save_grges(self): #vers 1
         """Save Garages button - writes every currently loaded garage
         back to its own real source IPL file(s) on disk (Aug 21 2026,
-        per Keith: "add support for GRGE" / "lets build add, del for
+         "add support for GRGE" / "lets build add, del for
         zon, cull, occu and ipl changes" / "both if you can"). Same
         real grouping/resolve/confirm/write pattern as _save_zones/
         _save_culls/_save_occls (see their own docstrings)."""
@@ -28068,7 +24759,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(1, 1, 1, 1)
         from apps.methods.imgfactory_svg_icons import get_save_icon, get_edit_icon
-        from PyQt6.QtWidgets import QButtonGroup
         title_row_widget = QWidget()
         title_row_widget.setObjectName("IDE_title_row")
         title_row = QHBoxLayout(title_row_widget)
@@ -28225,7 +24915,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         title_row = QHBoxLayout(title_row_widget)
         title_row.setContentsMargins(0, 0, 0, 0)
         from apps.methods.imgfactory_svg_icons import get_save_icon, get_edit_icon
-        from PyQt6.QtWidgets import QButtonGroup
 
         sm_buttonheight = 20
 
@@ -28434,38 +25123,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             img_tabs.addTab(table, str(i))
 
 
-    def _create_editing_panel_dock(self): #vers 1
-        """New tabbed "Editing Panel" dock - IDE/IPL/DAT/IMG, matching
-        MooMapper's own tabbed IMG Archive/Object Definition/Item
-        Placement structure - replaces the previous standalone IPL
-        Sections dock (its content now lives in the [IPL] tab, moved
-        rather than duplicated). [IPL] is the only fully real,
-        interactive tab so far; [IDE] and [DAT] show real data
-        (IDE file list, raw .dat text) but can't edit/save yet;
-        [IMG] shows real per-archive entry lists but can't
-        Extract/Add/Del/Rename yet - none of this project has any
-        write-back-to-disk infrastructure yet, for any file type."""
-        icon_color = self._get_icon_color()
-        tabs = QTabWidget()
-        tabs.addTab(self._create_ide_tab(),
-                   self._render_variant_icon('tab_ide', None, 24, icon_color, has_menu=False), "IDE")
-        tabs.addTab(self._create_ipl_tab(),
-                   self._render_variant_icon('tab_ipl', None, 24, icon_color, has_menu=False), "IPL")
-        tabs.addTab(self._create_dat_tab(),
-                   self._render_variant_icon('tab_dat', None, 24, icon_color, has_menu=False), "DAT")
-        tabs.addTab(self._create_img_tab(),
-                   self._render_variant_icon('tab_img', None, 24, icon_color, has_menu=False), "IMG")
-        tabs.setCurrentIndex(1)   # [IPL] is the main working tab so far
-
-        dock = QDockWidget("Editing Panel", self)
-        dock.setObjectName("Editing Panel")
-        dock.setWidget(tabs)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                        QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        self._editing_panel_dock = dock
-        self._editing_panel_tabs = tabs
-        return dock
 
     def _on_ipl_section_cell_clicked(self, row, col): #vers 5
         """Clicking the eye-icon cell (col 0) toggles that IPL's
@@ -28586,7 +25243,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if ipl_name in getattr(self, '_hidden_ipls', set()):
             self._on_ipl_section_cell_clicked(row, 0)
 
-    def _ensure_ipl_loaded(self, display_name): #vers 3
+    def _ensure_ipl_loaded(self, display_name): #vers 6
         """Actually load one IPL's content on demand, the first time
         it's toggled visible - parses its instances (GTAWorldLoader.
         load_ipl_by_name), refreshes self._all_instances/Object Browser
@@ -28641,43 +25298,29 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         model_cache = getattr(self, '_model_cache', None)
 
-        # Auto-load associated binary streams (Aug 1 2026)
+        # One shared dialog: batch loads pass theirs in via self._ipl_load_dlg
         stream_entries = getattr(self, '_ipl_names_with_binary_stream', {}).get(display_name, [])
-        verbose = self.map_settings.get('show_verbose_loading_dialog')
-        bulk_loading = getattr(self, '_shared_load_progress', None) is not None
-        dlg = None
-        if verbose and not bulk_loading and (new_instances or stream_entries):
-            # Suppressed during a bulk multi-IPL load (Aug 20 2026,
-            # per Keith: "this opens multiple dialogues. It should be
-            # one window") - _load_selected_ipl_sections' own real,
-            # shared progress dialog already reports which IPL is
-            # loading; a separate detailed log window per IPL on top
-            # of that would still be exactly the "multiple dialogues"
-            # gap this fix is for, just moved to a different dialog.
-            dlg = _VerboseLoadingDialog(f"Loading {display_name}", self)
-            dlg.show()
-            n_streams = len(stream_entries) if self.map_settings.get('load_text_plus_binary_ipl_set') else 0
-            dlg.add_header(f"Loading {display_name} and {n_streams} binary ipls.")
+        dlg = getattr(self, '_ipl_load_dlg', None)
+        own_dlg = dlg is None
+        if own_dlg:
+            dlg = _IplLoadDialog(self, 1)
+            dlg.start_file(display_name, 0)
+        if self.map_settings.get('show_verbose_loading_dialog'):
             for inst in new_instances:
-                dlg.add_line(f"{inst.model_id}, {inst.model_name}")
-
+                dlg.message(f"{inst.model_id}, {inst.model_name}")
         if model_cache is not None and new_instances:
-            self._preload_world_assets(
-                loader, model_cache, instances=new_instances,
-                title=f"Loading {display_name}…")
+            for m in self._load_models_into_dialog(dlg, loader, model_cache, new_instances):
+                dlg.message(f"missing: {m}")
 
-        if self.map_settings.get('load_text_plus_binary_ipl_set'):
+        # IV parent .wpl holds little; city placements are in its streams
+        if self.map_settings.get('load_text_plus_binary_ipl_set') or getattr(loader, 'game', None) == 'iv':
             for archive_path, stream_name in sorted(stream_entries, key=lambda t: t[1]):
                 if stream_name in getattr(self, '_loaded_binary_ipls', set()):
                     continue
-                if dlg is not None:
-                    dlg.add_header(f"Loading linked ipl file {stream_name}")
-                before_stream_count = len(getattr(self, '_all_instances', []))
+                dlg.message(f"Loading linked ipl file {stream_name}")
                 self._load_binary_ipl_stream(archive_path, stream_name)
-                if dlg is not None:
-                    new_stream_instances = self._all_instances[before_stream_count:]
-                    for inst in new_stream_instances:
-                        dlg.add_line(f"{inst.model_id}, {inst.model_name}")
+        if own_dlg:
+            dlg.finish(f"{display_name} loaded ({len(new_instances)} instances)")
 
     def _write_ipl_error_log(self, result): #vers 1
         """Write a plain-text log of one IPL's parse errors/warnings
@@ -28704,15 +25347,15 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return None
 
     def _style_ipl_name_item(self, name_item, hidden, loaded=False): #vers 5
-        """Grey out a disabled/hidden IPL's name text. Real fix (Aug
-        20 2026, per Keith: "once proloaded, mark them as loaded
+        """Grey out a disabled/hidden IPL's name text.  fix (Aug
+        20 2026,  "once proloaded, mark them as loaded
         white in the obj browser ipl llst") - loaded entries now get
         a genuinely brighter/white text colour, not just the existing
         "(Loaded)" text suffix, so a loaded IPL is visually distinct
         from an unloaded one at a glance, not just readable on close
         inspection.
 
-        Real fix (Aug 20 2026, per Keith: "entries should be
+         fix (Aug 20 2026,  "entries should be
         displaying the theme aware white") - a hardcoded QColor(255,
         255, 255) isn't theme-aware at all; a light theme's own
         background could be close to pure white too, making loaded
@@ -28735,7 +25378,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             color = text_color
         name_item.setForeground(QBrush(color))
 
-    def _toggle_ipl_section(self, ipl_name, hidden): #vers 2
+    def _toggle_ipl_section(self, ipl_name, hidden): #vers 3
         """Show/hide all instances from one IPL file - recomputes the
         visible instance subset from the full loaded set and re-feeds
         it to the world-view panes and Instance List, without needing
@@ -28746,6 +25389,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._hidden_ipls.add(ipl_name)
         else:
             self._hidden_ipls.discard(ipl_name)
+        if getattr(self, '_ipl_batch_defer', False):
+            self._ipl_batch_dirty = True     # batch load: one refresh at the end
+            return
         self._apply_ipl_visibility_filter(clear_display_lists=False)
 
     # --- World viewport, LOD, ribbon/menu framework (ported from map_workshop_old_version.py) ---
@@ -28882,21 +25528,6 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     mw.menu_bar_system._remove_tool_menu()
 
 
-    def _toggle_menubar(self, on: bool): #vers 3
-        self.map_settings.set('show_menubar', on)
-        self.map_settings.save()
-        c = getattr(self, '_menu_bar_container', self._menu_bar if hasattr(self, '_menu_bar') else None)
-        if c:
-            c.setMinimumHeight(0)
-            c.setMaximumHeight(16777215 if on else 0)
-            c.setVisible(on)
-
-
-    def _toggle_statusbar(self, on: bool): #vers 1
-        self.map_settings.set('show_statusbar', on)
-        self.map_settings.save()
-        if hasattr(self, '_status_bar'):
-            self._status_bar.setVisible(on)
 
 
     def _preload_img_archives_to_os_cache(self, img_paths): #vers 1
@@ -28933,76 +25564,107 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 continue
         self._set_status("Ready")
 
-    def _preload_world_assets(self, loader, model_cache, instances=None, title=None): #vers 3
-        """Eagerly load+parse (and cache) geometry and textures for
-        every distinct model referenced by the given instances (or
-        every loaded instance, if none given), with a progress dialog
-        showing what's currently being processed.
+    def _load_workers(self) -> int: #vers 1
+        """Parallel parse workers from settings; 0 means cores - 2."""
+        import os
+        n = int(self.map_settings.get('load_workers') or 0)
+        return n if n > 0 else max(1, (os.cpu_count() or 1) - 2)
 
-        Real fix (Aug 20 2026, per Keith: "when selecting multiply
-        ipls, all select, load all, this opens multiple dialogues. It
-        should be one window with the title and process change") -
-        this used to always create its own new QProgressDialog every
-        call; _ensure_ipl_loaded calls this once per IPL, so loading
-        several IPLs at once (via _load_selected_ipl_sections' own
-        loop) meant a separate dialog popping open and closing for
-        each one in turn. Now checks self._shared_load_progress first
-        - when the caller has already set one up (see _load_selected_
-        ipl_sections' own real usage), this reuses that same one
-        window instead of creating a second, redundant one; a single-
-        IPL caller (e.g. clicking one eye icon) leaves that attribute
-        unset, so it still gets its own dialog exactly as before."""
-        instances = instances if instances is not None else loader.instances
-        # Deduplicate by model_name - many instances share one model,
-        # no need to load it more than once.
-        seen_models = {}
+    def _load_models_parallel(self, dlg, model_cache, items, workers,
+                              load_models, load_textures): #vers 2
+        """Parse all models/TXDs in worker processes; rows update as each finishes."""
+        rows, by_txd, missing = {}, {}, []
+        for model_name, txd_name in items:
+            rows[model_name.lower()] = (dlg.model_row(model_name), txd_name if load_textures else "")
+            if load_textures and txd_name:
+                by_txd.setdefault(txd_name.lower(), []).append(model_name.lower())
+                if not model_cache.is_txd_indexed(txd_name):
+                    missing.append(f"{txd_name}.txd")
+            if load_models and not model_cache.is_dff_indexed(model_name):
+                missing.append(f"{model_name}.dff")
+        dff_done, txd_done = set(), {}
+        total = len(items) * (2 if load_textures else 1)
+        state = {'n': 0}
+
+        def _row_state(key): #vers 1
+            row, txd = rows[key]
+            need_dff = load_models and key not in dff_done
+            need_txd = bool(txd) and txd.lower() not in txd_done
+            if need_dff:
+                return
+            if need_txd:
+                dlg.set_model(row, 60)
+            else:
+                count = txd_done.get(txd.lower()) if txd else None
+                dlg.set_model(row, 100, f"{count} ({txd})" if txd else "")
+
+        def _done(kind, name, result): #vers 1
+            state['n'] += 1
+            dlg.set_file_progress(state['n'], total)
+            if kind == 'dff':
+                dff_done.add(name)
+                if name in rows:
+                    _row_state(name)
+            else:
+                txd_done[name] = len(result) if result else 0
+                for key in by_txd.get(name, []):
+                    _row_state(key)
+
+        dlg.message(f"Parsing with {workers} worker processes")
+        model_cache.prefetch([m for m, _ in items] if load_models else [],
+                             [t for _, t in items if t] if load_textures else [],
+                             workers, on_done=_done, is_cancelled=lambda: dlg.cancelled,
+                             on_idle=lambda: dlg._pump(),
+                             on_stall=lambda n: dlg.message(
+                                 f"Workers stopped responding - parsing last {n} here, one at a time"))
+        if dlg.cancelled:
+            return list(dict.fromkeys(missing))
+        dff_done.update(rows)                 # already-cached items got no callback
+        for txd in by_txd:
+            if txd not in txd_done:
+                tex = model_cache.get_textures(txd)
+                txd_done[txd] = len(tex) if tex else 0
+        for key in rows:
+            _row_state(key)
+        dlg.set_file_progress(1, 1)
+        return list(dict.fromkeys(missing))
+
+    def _load_models_into_dialog(self, dlg, loader, model_cache, instances,
+                                 load_models=True, load_textures=True): #vers 2
+        """Load each unique model's DFF/TXD with a dialog row each; returns missing files."""
+        seen = {}
         for inst in instances:
-            if inst.model_name not in seen_models:
+            if inst.model_name not in seen:
                 obj = loader.get_object(inst.model_id)
-                txd_name = obj.txd_name if obj else ""
-                seen_models[inst.model_name] = (txd_name, inst.source_ipl)
-        if not seen_models:
-            return
-
-        items = list(seen_models.items())
-        shared = getattr(self, '_shared_load_progress', None)
-        if shared is not None:
-            progress = shared
-        else:
-            progress = QProgressDialog(
-                title or "Loading assets…", "Cancel", 0, len(items), self)
-            progress.setWindowTitle("Loading Meshes and Textures")
-            progress.setMinimumDuration(500)   # don't flash up for fast loads
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-
-        loaded_txds = set()
-        for i, (model_name, (txd_name, source_ipl)) in enumerate(items):
-            if progress.wasCanceled():
-                self._set_status(
-                    f"Asset loading cancelled after {i} of {len(items)} models "
-                    f"- remaining models will still load on demand while browsing")
+                seen[inst.model_name] = obj.txd_name if obj else ""
+        items = list(seen.items())
+        workers = self._load_workers()
+        if workers > 1 and len(items) > 4 and hasattr(model_cache, 'prefetch'):
+            return self._load_models_parallel(dlg, model_cache, items, workers,
+                                              load_models, load_textures)
+        missing, tex_counts = [], {}
+        for i, (model_name, txd_name) in enumerate(items):
+            if dlg.cancelled:
+                self._set_status(f"Model loading cancelled after {i} of {len(items)} - "
+                                 f"the rest load on demand while browsing")
                 break
-            progress.setLabelText(
-                f"{(title + chr(10)) if (shared is not None and title) else ''}"
-                f"Model: {model_name}\nTexture: {txd_name or '(none)'}\nIPL: {source_ipl}")
-            if shared is None:
-                progress.setValue(i)
-            model_cache.get_geometry(model_name)
-            if txd_name and txd_name not in loaded_txds:
-                model_cache.get_textures(txd_name)
-                loaded_txds.add(txd_name)
-        if shared is None:
-            progress.setValue(len(items))
-
-    def _toggle_cull_boxes(self, checked): #vers 1
-        """Show/hide wireframe cull zone boxes across all World View
-        panes - real, working feature using GTAWorldLoader.culls (see
-        MapViewport._draw_cull_boxes for the honest caveat on the
-        field-interpretation assumption)."""
-        loader = getattr(self, '_world_loader', None)
-        culls = loader.culls if loader is not None else []
-        for pane in getattr(self, '_world_panes', []):
-            pane.set_cull_boxes(culls, checked)
+            row = dlg.model_row(model_name)
+            if load_models:
+                if not model_cache.is_dff_indexed(model_name):
+                    missing.append(f"{model_name}.dff")
+                model_cache.get_geometry(model_name)
+            tex_text = ""
+            if load_textures and txd_name:
+                dlg.set_model(row, 60)
+                if not model_cache.is_txd_indexed(txd_name):
+                    missing.append(f"{txd_name}.txd")
+                if txd_name not in tex_counts:
+                    tex = model_cache.get_textures(txd_name)
+                    tex_counts[txd_name] = len(tex) if tex else 0
+                tex_text = f"{tex_counts[txd_name]} ({txd_name})"
+            dlg.set_model(row, 100, tex_text)
+            dlg.set_file_progress(i + 1, len(items))
+        return list(dict.fromkeys(missing))
 
     def _apply_ipl_visibility_filter(self, auto_fit=True, clear_display_lists=True): #vers 6
         """Recompute which instances are currently visible: every
@@ -29253,12 +25915,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Right-click on a box-type overlay button (Cull/Zon/Grge)
         toggled box-corner resize edit mode (Aug 19 2026).
 
-        Real fix (Aug 21 2026, per Keith: "Bug: Right radar also
+         fix (Aug 21 2026,  "Bug: Right radar also
         highlights cull; both buttons seem to be linked when you
         right-click them") - used to force-sync every other box-type
         button's own visual state (editing dashes + shown) to match
         whichever one was actually right-clicked, including force-
-        turning a box type ON that Keith may never have wanted shown
+        turning a box type ON that   may never have wanted shown
         at all. That syncing was left over from when self._box_edit_
         mode genuinely gated corner-picking on the viewport side - it
         no longer does (removed turns ago, corner-clicking works
@@ -29341,7 +26003,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Push loaded SA audio zones to the viewport's own sound-
         icon overlay (Aug 20 2026).
 
-        Real bugs fixed here (Aug 20 2026, per Keith: "clicking on the
+         bugs fixed here (Aug 20 2026,  "clicking on the
         Auzo button still doesn't show the contents on the auzo file,
         from auzo entry" - and his own real, working comparison to
         paths/zon/cull/occl: "clicked on first, then [Paths] button to
@@ -29354,7 +26016,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
            occl_box_visualization, all four called there already)
            refreshes from whenever IPL visibility changes - i.e.
            exactly the "click the IPL entry" half of the workflow
-           Keith describes. Auzo only ever refreshed from its own
+             describes. Auzo only ever refreshed from its own
            toggle button's own change handler, so clicking a new
            auzo-containing IPL entry never actually pushed anything
            new to the viewport unless the toggle itself happened to
@@ -29398,7 +26060,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Push loaded water.dat shapes AND waterpro.dat's own real
         grid to the viewport's own overlay (Aug 20 2026).
 
-        Real fixes here, per Keith:
+         fixes here, .per:
 
         1. "besides the button on the IPL control that doesnt seem to
            work" - this was never called from _apply_ipl_visibility_
@@ -29455,7 +26117,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     for col in range(gw):
                         level_idx = waterpro.visible_map[row][col]
                         # Real, confirmed "cutout" sentinel (Aug 20
-                        # 2026, per Keith: "waterpro.dat allowing cut
+                        # 2026,  "waterpro.dat allowing cut
                         # out areas, making sure waterpro.dat is used
                         # is very important, look at water_workshop
                         # as resource") - water_workshop.py's own
@@ -29512,7 +26174,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._refresh_auzo_visualization()
 
     def _on_interior_show_all_toggled(self, checked): #vers 1
-        """Interior button left-click (Aug 20 2026, per Keith: "show 0
+        """Interior button left-click (Aug 20 2026,  "show 0
         only on the viewpoint; showing 0 to 14+ by selecting them") -
         checked shows every interior value together (no filtering);
         unchecked returns to the default, interior 0 (exterior) only."""
@@ -29524,20 +26186,20 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             self._set_status("Showing interior 0 (exterior) only")
 
     def _show_interior_picker_menu(self, interior_btn): #vers 3
-        """Interior button right-click (Aug 20 2026, per Keith's own
+        """Interior button right-click (Aug 20 2026  own
         follow-up: "I have no idea how many there are for GTA 3, GTA
         VC, or SA") - lists every interior value actually present in
-        the currently loaded instances, with counts, so Keith can see
+        the currently loaded instances, with counts, so   can see
         exactly what a given world uses rather than guessing, and
         pick one to isolate.
 
-        Real names shown for VC (Aug 20 2026, per Keith's own real,
+         names shown for VC (Aug 20 2026  own real,
         direct list of VC interior areas, cross-confirmed against
         GTAMods' own documented "Interior" page - see VC_INTERIOR_
         NAMES' own docstring in gta_dat_parser.py for the full, real
         confirmation story).
 
-        Real fix for SA (Aug 20 2026, per Keith: "full list for VC,
+         fix for SA (Aug 20 2026,  "full list for VC,
         now im looking for SA") - unlike VC, an SA interior number
         does NOT uniquely identify one real area on its own (GTAMods'
         own documented SA list shows many unrelated real buildings
@@ -29608,10 +26270,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         else:
             self._set_status(f"Showing interior {value} only")
 
-    def _on_show_water_toggled(self, checked): #vers 3
+    def _on_show_water_toggled(self, checked): #vers 4
         """Show Water checked/unchecked.
 
-        Re-applied (Aug 20 2026, per Keith: "get the water working,
+        Re-applied (Aug 20 2026,  "get the water working,
         from the preloaded file, [water] button off/on toggle") -
         real data now comes only from the Preload dialog (or the
         auto-retooled loader.waterpro/water_shapes data), which
@@ -29621,17 +26283,24 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(vp, 'set_show_water'):
             vp.set_show_water(checked)
+        if getattr(self, '_vp_gauges', None) is not None:
+            self._vp_gauges.refresh()
 
-    def _on_water_layer_toggled(self, checked): #vers 1
-        """Right-click switches between waterpro.dat's own two real
-        layers (Aug 20 2026, per Keith: "when you right click the
-        water button, show the other water layer, right clicking
-        again shows the first") - visible_map (checked=False, the
-        default/first layer) vs physical_map (checked=True, double
-        the resolution). Only meaningful once a real waterpro.dat has
-        actually been preloaded (water.dat has no second layer at
-        all); silently does nothing otherwise, since there's nothing
-        real to switch to."""
+    def _on_water_layer_toggled(self, checked): #vers 2
+        """Middle-click switches between waterpro.dat's own two real
+        layers (Sep 5 2026,  "the right click toggle
+        between vis_water and phy_water needs to be moved to the
+        middle button so it doesnt clash with the right click menu" -
+        moved off right-click/edit_toggled, which also freed up
+        right-click for its own real context menu) - visible_map
+        (checked=False, the default/first layer) vs physical_map
+        (checked=True, double the resolution). Only meaningful once a
+        real waterpro.dat has actually been preloaded (water.dat has
+        no second layer at all); silently does nothing otherwise,
+        since there's nothing real to switch to. Tracks its own
+        current state (self._water2_showing_physical) now that the
+        button itself no longer does, since middle_clicked carries no
+        boolean the way edit_toggled used to."""
         waterpro = getattr(self, '_water2_waterpro_source', None)
         if waterpro is None:
             return
@@ -29639,6 +26308,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         vp = getattr(self, 'preview_widget', None)
         if vp is None or not hasattr(vp, 'set_water2_data'):
             return
+        self._water2_showing_physical = checked
         if checked:
             cells = self._waterpro_physical_to_cells(waterpro, game)
             self._set_status("Water: showing physical_map layer (double resolution)")
@@ -29726,7 +26396,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _resolve_ipl_abs_path(self, source_ipl_basename): #vers 1
         """Find the real, full, absolute path a loaded IPL's own
         basename (source_ipl, e.g. "map.zon") corresponds to on disk
-        (Aug 21 2026, per Keith: "we need to finish the add, del,
+        (Aug 21 2026,  "we need to finish the add, del,
         save functions for zon") - searches loader.load_log (a real
         list of (phase, "IPL", abs_path, ok) tuples every real loaded
         IPL is already recorded in, for on-demand and eager loading
@@ -29746,10 +26416,10 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         """Write a real "zone...end" section back to its own real IPL
         file on disk, replacing only that section's own real content -
         every other real line (other sections, comments, blank lines)
-        is left completely untouched (Aug 21 2026, per Keith: "we
+        is left completely untouched (Aug 21 2026,  "we
         need to finish the add, del, save functions for zon").
 
-        Real safety: writes a real ".bak" backup of the file's own
+         safety: writes a real ".bak" backup of the file's own
         real, current content first (only if one doesn't already
         exist, so repeated saves in one real session don't overwrite
         an earlier, real pre-edit backup with an already-edited one).
@@ -29762,7 +26432,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
         Returns (success: bool, message: str)."""
         try:
-            with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
+            with open(abs_path, 'r', encoding='latin-1', newline='') as f:
                 lines = f.readlines()
         except Exception as e:
             return False, f"Couldn't read {abs_path}: {e}"
@@ -29793,19 +26463,8 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 lines[-1] += '\n'
             lines += ['zone\n'] + new_lines + ['end\n']
 
-        backup_path = abs_path + '.bak'
-        if not os.path.isfile(backup_path):
-            try:
-                with open(abs_path, 'r', encoding='ascii', errors='ignore') as f:
-                    original = f.read()
-                with open(backup_path, 'w', encoding='ascii', errors='ignore') as f:
-                    f.write(original)
-            except Exception as e:
-                return False, f"Couldn't write backup for {abs_path}: {e}"
-
         try:
-            with open(abs_path, 'w', encoding='ascii', errors='ignore') as f:
-                f.writelines(lines)
+            _write_ipl_lines(abs_path, lines)      # timestamped backup + atomic write, CRLF kept
         except Exception as e:
             return False, f"Couldn't write {abs_path}: {e}"
         return True, f"Wrote {len(zone_entries)} zone(s) to {os.path.basename(abs_path)}"
@@ -29813,7 +26472,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
     def _save_zones(self): #vers 1
         """Save Zones button - writes every currently loaded zone back
         to its own real source IPL file(s) on disk (Aug 21 2026, per
-        Keith: "we need to finish the add, del, save functions for
+         : "we need to finish the add, del, save functions for
         zon"). Groups loader.zones by source_ipl (several files can
         each have their own real zone entries), resolves each real
         basename to its own real, full path via _resolve_ipl_abs_
@@ -29821,7 +26480,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         A confirmation dialog is shown first, since this genuinely
         overwrites real files on disk (with a real .bak safety copy,
         but still a real, deliberate action, not something to fire
-        without Keith's own explicit go-ahead each time)."""
+        without my own explicit go-ahead each time)."""
         loader = getattr(self, '_world_loader', None)
         if loader is None:
             self._set_status("No world loaded")
@@ -29915,7 +26574,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _refresh_grge_box_visualization(self): #vers 1
         """Push the currently visible IPLs' garages to the viewport's
-        box overlay (Aug 21 2026, per Keith: "add support for GRGE"),
+        box overlay (Aug 21 2026,  "add support for GRGE"),
         same real pattern _refresh_occl_box_visualization uses."""
         vp = getattr(self, 'preview_widget', None)
         if vp is None or not hasattr(vp, 'set_grge_boxes'):
@@ -29938,12 +26597,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             return
         hidden = getattr(self, '_hidden_ipls', set())
         grges = [g for g in getattr(loader, 'grges', []) if g.source_ipl not in hidden]
-        # Real fix (Aug 21 2026, per Keith's own real, uploaded GRGE
+        #  fix (Aug 21 2026  own real, uploaded GRGE
         # example lines: "the grge data seems to be found in most of
-        # the ipl's") - checking Keith's own real data against it
+        # the ipl's") - checking my own real data against it
         # revealed x2 doesn't hold a real, distinct second X corner at
         # all - it's always exactly equal to x1 in every real line
-        # Keith posted. Confirmed via a real, independent source (a
+        #   posted. Confirmed via a real, independent source (a
         # SannyBuilder-community IPL format reference): the field this
         # codebase calls "front_x" is actually the box's own real
         # second X corner ("Lower Right Front"), and the field this
@@ -30026,13 +26685,48 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         rz = 2.0*(xz-wy)*vx + 2.0*(yz+wx)*vy + (1.0-2.0*(xx+yy))*vz
         return rx, ry, rz
 
+    def _model_collision(self, model_cache, model_name): #vers 1
+        """(col_vertices, col_triangles) from COL, else GTA IV .wbd bounds."""
+        cv, ct = self._convert_collision_geometry(model_cache.get_collision(model_name))
+        if not ct and hasattr(model_cache, 'get_iv_collision'):
+            iv = model_cache.get_iv_collision(model_name)
+            if iv:
+                cv, ct = iv
+        return cv, ct
+
+    def _iv_static_bound_entries(self, model_cache, instances): #vers 1
+        """World-space GTA IV .wbn collision entries for the visible map areas."""
+        if not hasattr(model_cache, 'iv_static_bound_names'):
+            return []
+        areas = set()
+        for name in {getattr(i, 'source_ipl', '') for i in instances}:
+            stem = os.path.splitext(name)[0].lower()
+            for tag in ('_stream', '_strbig'):
+                if tag in stem:
+                    stem = stem.rsplit(tag, 1)[0]
+                    break
+            areas.add(stem)
+        entries = []
+        for area in sorted(areas):
+            for stem in model_cache.iv_static_bound_names(area):
+                bounds = model_cache.get_iv_static_bounds(stem)
+                if not bounds:
+                    continue
+                entries.append({'vertices': [], 'normals': [], 'uvs': [], 'triangles': [],
+                                'materials': [], 'prelit': [], 'geom_flags': 0,
+                                'col_vertices': bounds[0], 'col_triangles': bounds[1],
+                                'pos': (0.0, 0.0, 0.0), 'rot': (0.0, 0.0, 0.0, 1.0),
+                                'scale': (1.0, 1.0, 1.0), 'model_key': f"wbn:{stem}",
+                                'instance': None})
+        return entries
+
     def _convert_collision_geometry(self, col_model): #vers 1
         """Convert a COLModel (or None) into the flat (col_vertices,
         col_triangles) shape DFFViewport's collision overlay draws
         expect (Aug 14 2026)"""
         if col_model is None or not col_model.faces or not col_model.vertices:
             return [], []
-        from apps.components.Model_Editor.depends.col_materials import get_material_colour, COLGame
+        from apps.methods.col_materials import get_material_colour, COLGame
         ver = getattr(getattr(col_model, 'header', None), 'version', None)
         game = COLGame.VC if getattr(ver, 'value', 3) == 1 else COLGame.SA
         col_vertices = [(v.x, v.y, v.z) for v in col_model.vertices]
@@ -30059,7 +26753,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         finally:
             self._refresh_world_view_in_progress = False
 
-    def _refresh_world_view_impl(self, instances, auto_fit, clear_display_lists): #vers 2
+    def _refresh_world_view_impl(self, instances, auto_fit, clear_display_lists): #vers 7
         """The actual body of _refresh_world_view, split out only so
         the reentrancy guard above can wrap it in a try/finally
         without a second level of indentation across this whole
@@ -30118,7 +26812,35 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 QApplication.processEvents()
                 dff_model = model_cache.get_geometry(model_name)
                 if dff_model is None or not getattr(dff_model, 'geometries', None):
-                    converted[model_name] = None
+                    # Model geometry missing/unparsed - still attempt
+                    # collision independently by name (Sep 5 2026, per
+                    #  : "it should still find the model name in
+                    # the col, not just the img file, and show them").
+                    # Previously this set converted[model_name] = None
+                    # outright, which skipped the whole instance below
+                    # (if base is None: continue) - meaning collision
+                    # was never even looked up for any model whose own
+                    # DFF failed to resolve, even though collision is
+                    # indexed and resolved completely independently of
+                    # geometry. A None-geometry entry with real
+                    # col_vertices/col_triangles still lets this
+                    # instance show up whenever a collision render
+                    # mode is on, via _draw_world_instances' own
+                    # self._mode is None handling for "no model style
+                    # selected" - the same underlying mechanism, just
+                    # reached because THIS model has no geometry
+                    # rather than because the user deselected one.
+                    col_vertices, col_triangles = self._model_collision(model_cache, model_name)
+                    if col_vertices and col_triangles:
+                        converted[model_name] = {
+                            'vertices': [], 'normals': [], 'uvs': [],
+                            'triangles': [], 'materials': [], 'prelit': [],
+                            'geom_flags': 0,
+                            'col_vertices': col_vertices,
+                            'col_triangles': col_triangles,
+                        }
+                    else:
+                        converted[model_name] = None
                 else:
                     # Merge every geometry, not just the first (Aug 1 2026)
                     all_vertices, all_normals, all_uvs, all_prelit = [], [], [], []
@@ -30142,8 +26864,9 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                              t.material_id + mat_offset)
                             for t in g.triangles)
                         all_materials.extend(g.materials)
-                    col_vertices, col_triangles = self._convert_collision_geometry(
-                        model_cache.get_collision(model_name))
+                    col_vertices, col_triangles = self._model_collision(model_cache, model_name)
+                    # IV .wdr textures embedded in the model
+                    all_textures.extend(getattr(dff_model, 'embedded_textures', {}).values())
                     converted[model_name] = {
                         'vertices':  all_vertices,
                         'normals':   all_normals,
@@ -30151,7 +26874,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                         'triangles': all_triangles,
                         'materials': all_materials,
                         'prelit':    all_prelit,
-                        # Real fix (Aug 21 2026, per Keith's own real,
+                        #  fix (Aug 21 2026  own real,
                         # uploaded alpha_showing.png screenshot: "some
                         # alpha objects not being rendered as they
                         # should be") - this real model's own real
@@ -30190,7 +26913,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             entry = dict(base)
             entry['pos']   = (inst.pos_x, inst.pos_y, inst.pos_z)
             entry['rot']   = self._effective_rotation(inst)
-            entry['scale'] = (inst.scale_x, inst.scale_y, inst.scale_z)
+            entry['scale'] = self._render_scale(inst)
             entry['model_key'] = model_name
             entry['instance'] = inst
             entries.append(entry)
@@ -30198,12 +26921,14 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         if all_textures and hasattr(vp, '_upload_textures'):
             # additive mirrors clear_display_lists exactly (Aug 1 2026)
 
-            vp._upload_textures(all_textures, additive=not clear_display_lists)
+            vp._upload_textures(all_textures, additive=True)
         # Only force the default render mode once, on the very first
         # world load (Aug 1 2026)
         if hasattr(vp, 'set_render_mode') and not getattr(self, '_world_render_mode_set', False):
             vp.set_render_mode('textured')
             self._world_render_mode_set = True
+        if getattr(loader, 'game', None) == 'iv':
+            entries.extend(self._iv_static_bound_entries(model_cache, instances))
         vp.set_world_instances(entries, auto_fit=auto_fit, clear_display_lists=clear_display_lists)
         self._populate_models_panel_from_ipl(instances)
 
@@ -30326,7 +27051,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
 
     def _apply_interior_filter(self, instances): #vers 1
         """Filter instances by their own interior value (Aug 20 2026,
-        per Keith: "Can we look at interior values? We see all models
+         "Can we look at interior values? We see all models
         using the value 0. Still, interior rendering is hidden until
         you're inside buildings. We need a svg to toggle interior
         models: show 0 only on the viewpoint; showing 0 to 14+ by
@@ -30341,7 +27066,7 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         self._interior_filter_value: None means no filtering (show
         every interior value together); an int means show only
         instances with that exact interior value. Defaults to 0,
-        matching Keith's own stated default."""
+        matching my own stated default."""
         value = getattr(self, '_interior_filter_value', 0)
         if value is None:
             return instances
@@ -30391,16 +27116,33 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
         threshold = self.map_settings.get('lod_draw_dist_threshold')
         return draw_dist > threshold
 
-    def _apply_lod_filter(self, instances): #vers 3
+    def _is_lod_named(self, model_name): #vers 1
+        """True if model_name is styled as a LOD version by naming
+        convention - "LOD" prefix or suffix, case-insensitive (Sep 5
+        2026,  "should only be those prefix or suffixed
+        with LOD"). Matches GTAWorldLoader.resolve_lod_pairs' own
+        Strategy 2 naming rule exactly."""
+        name = (model_name or '').lower()
+        return name.startswith('lod') or name.endswith('lod')
+
+    def _apply_lod_filter(self, instances): #vers 4
         """Given an already-IPL-filtered instance list, decide for each
         LOD-paired primary instance which version(s) to keep - per-
         instance override (self._lod_overrides, keyed by id(primary
         instance), one of 'normal'/'lod'/'both'/None) takes precedence
-        over the global mode (self._lod_display_mode). Instances with
-        no LOD pair at all pass through unchanged.
+        over the global mode (self._lod_display_mode).
 
-        Also applies a separate, standalone draw-distance-based LOD
-        check (Aug 1 2026)"""
+        Instances with no detected LOD pair are now filtered directly
+        (Sep 5 2026,  "in LOD only, I still see the normal
+        models, should only be those prefix or suffixed with LOD") -
+        'lod' mode now shows ONLY instances flagged as LOD, by name
+        ("LOD" prefix/suffix, see _is_lod_named) or by the draw-
+        distance heuristic; everything else is hidden, full stop.
+        'normal' mode is the mirror - hides anything flagged either
+        way. Previously an instance with no LOD signal at all fell
+        through to an unconditional "always show" default in both
+        modes, which is exactly what let plain normal objects with no
+        LOD pair keep appearing in 'lod' mode."""
         pairs = getattr(self, '_lod_pairs', None)
         overrides = getattr(self, '_lod_overrides', {})
         global_mode = getattr(self, '_lod_display_mode', 'normal')
@@ -30417,123 +27159,39 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                     result.append(pairs[iid])
                 else:  # 'normal'
                     result.append(inst)
-            elif pairs and iid in paired_target_ids:
+                continue
+            if pairs and iid in paired_target_ids:
                 # This instance IS someone's LOD target - it's only
                 # included via its primary above (in 'lod'/'both' mode),
                 # to avoid duplicates when both members of a pair pass
                 # the IPL filter.
                 continue
-            elif global_mode != 'both' and self._is_lod_by_draw_distance(inst):
-                if global_mode == 'lod':
-                    result.append(inst)
-                # global_mode == 'normal': excluded entirely, no
-                # counterpart to substitute in its place.
-            else:
+            if global_mode == 'both':
                 result.append(inst)
+                continue
+            is_lod = (self._is_lod_named(inst.model_name)
+                      or self._is_lod_by_draw_distance(inst))
+            if global_mode == 'lod':
+                if is_lod:
+                    result.append(inst)
+            else:  # 'normal'
+                if not is_lod:
+                    result.append(inst)
         return result
 
-    def _set_lod_display_mode(self, mode): #vers 2
+    def _set_lod_display_mode(self, mode): #vers 4
         """Global LOD display mode - 'normal' (default), 'lod', or
         'both'. Per-instance overrides (set via the Instance List)
         still take precedence over this for any instance they cover.
 
         Forces an immediate repaint (Aug 1 2026)"""
         self._lod_display_mode = mode
-        self._apply_ipl_visibility_filter(clear_display_lists=False)
+        self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=False)
         vp = getattr(self, 'preview_widget', None)
         if vp is not None and hasattr(vp, 'repaint'):
             vp.repaint()
 
-    def _find_lod_primary_key(self, instance): #vers 1
-        """Given an instance currently displayed in a row (which may be
-        either the 'primary' or its LOD-paired counterpart, depending
-        on the current global/override mode), find the id() key to use
-        with self._lod_overrides - always the primary's id(), whichever
-        member is actually showing right now."""
-        pairs = getattr(self, '_lod_pairs', None)
-        if not pairs:
-            return None
-        iid = id(instance)
-        if iid in pairs:
-            return iid
-        for primary_id, target in pairs.items():
-            if target is instance:
-                return primary_id
-        return None
 
-    def _set_lod_override(self, primary_key, mode): #vers 1
-        """Set (or clear, if mode is None) a per-instance LOD override
-        for one specific pair, keyed by the primary instance's id()."""
-        overrides = getattr(self, '_lod_overrides', None)
-        if overrides is None:
-            return
-        if mode is None:
-            overrides.pop(primary_key, None)
-        else:
-            overrides[primary_key] = mode
-        self._apply_ipl_visibility_filter(clear_display_lists=False)
-
-    def _apply_viewport_movement_settings(self, pane, label): #vers 1
-        """Apply the configured pan-button/rotate-button/invert-axis
-        settings for one World View pane, based on its current view
-        label (Top/Side/Front/3D each get their own invert settings,
-        since their different camera orientations don't necessarily
-        need the same correction)."""
-        invert = self.map_settings.get('viewport_pan_invert') or {}
-        axis = invert.get(label, {'x': False, 'y': False})
-        pane.configure_movement(
-            pan_button=self.map_settings.get('viewport_pan_button'),
-            rotate_button=self.map_settings.get('viewport_rotate_button'),
-            invert_x=axis.get('x', False),
-            invert_y=axis.get('y', False))
-
-    def _create_world_viewport_dock_tmp(self): #vers 1
-        """PARKED (Jul 31 2026) - the original standalone "World View"
-        dock. Its Top/Side/3D MapViewport triple-pane content was
-        migrated into _create_viewport_dock (self._viewport_dock is now
-        the one remaining viewport)"""
-        try:
-            from apps.components.Map_Editor.depends.map_viewport import MapViewport
-        except Exception as e:
-            print(f"[MapWorkshop] MapViewport unavailable: {e}")
-            return None
-
-        presets = [("Top", 0, 0, 'ortho'),
-                   ("Side", 90, 0, 'ortho'),
-                   ("3D", 45, 25, 'perspective')]
-        self._world_panes = []
-        for label, yaw, pitch, proj in presets:
-            pane = MapViewport()
-            pane.set_view_lock(proj == 'ortho', label, yaw=yaw, pitch=pitch,
-                               projection=proj)
-            self._apply_viewport_movement_settings(pane, label)
-            pane.set_pick_callback(self._on_viewport_instance_picked)
-            pane.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-            pane._label_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            pane._label_widget.customContextMenuRequested.connect(
-                lambda pos, p=pane: self._show_world_pane_menu(p, p._label_widget.mapToGlobal(pos)))
-
-            pane.installEventFilter(self)
-            self._world_panes.append(pane)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        for pane in self._world_panes:
-            splitter.addWidget(pane)
-        self._world_splitter = splitter
-        self._maximized_world_pane = None
-
-        dock = QDockWidget("World View", self)
-        dock.setObjectName("World View")
-        dock.setWidget(splitter)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                        QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        self._world_view_dock = dock
-
-        # Default to showing only 3D
-        self._toggle_world_pane_maximize(self._world_panes[2])   # index 2 = "3D"
-
-        return dock
 
     def _update_mode_button_style(self): #vers 2
         """Switch the Object Browser mode buttons (All/Most Used/
@@ -30590,83 +27248,12 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
             needed += fm.horizontalAdvance(text) + btn.iconSize().width() + 24
         available = row_widget.width()
         show_text = available >= needed
-        print(f"[collapse-debug] row={row_widget.objectName() or id(row_widget)} "
-              f"available={available} needed={needed} show_text={show_text}")
         for btn, text in specs:
             btn.setText(text if show_text else "")
-
-    def _toggle_world_pane_maximize(self, pane): #vers 2
-        """Maximize the given world-view pane to fill the whole dock
-        (hiding its siblings), or restore all 3 if already maximized.
-        Simpler than Model Workshop's version - one flat splitter here,
-        not a nested 2x2 grid, so just hiding the other panes is enough."""
-        panes = getattr(self, '_world_panes', None)
-        if not panes:
-            return
-        if getattr(self, '_maximized_world_pane', None) is pane:
-            for p in panes:
-                p.setVisible(True)
-            self._maximized_world_pane = None
-            restore_label = getattr(pane, '_pre_maximize_label', None) or pane._view_label
-            pane._label_widget.setText(restore_label)
-            pane._label_widget.adjustSize()
-            return
-        for p in panes:
-            p.setVisible(p is pane)
-        self._maximized_world_pane = pane
-        pane._pre_maximize_label = pane._view_label
-        pane._label_widget.setText("Full View")
-        pane._label_widget.adjustSize()
-
-    def _assign_world_pane_view(self, pane, label, yaw, pitch, projection): #vers 2
-        """Apply a user-chosen preset to one world-view pane. If this
-        pane is currently maximized, re-apply the 'Full View' label
-        afterward - set_view_lock always writes the new view name into
-        the label, which would otherwise silently drop the full-view
-        indication while still actually maximized. Also re-applies
-        movement settings for the new label, since Top/Side/Front/3D
-        can each have their own pan-invert configuration."""
-        pane.set_view_lock(projection == 'ortho', label, yaw=yaw, pitch=pitch,
-                            projection=projection)
-        self._apply_viewport_movement_settings(pane, label)
-        if getattr(self, '_maximized_world_pane', None) is pane:
-            pane._pre_maximize_label = label
-            pane._label_widget.setText("Full View")
-            pane._label_widget.adjustSize()
-
 
 
     #    File I/O                                                               
 
-    def _setup_corner_overlay(self): #vers 3
-        """Create or re-raise the corner resize overlay.
-        Only active in standalone (frameless) mode.
-        Called from showEvent and resizeEvent with a delay so all child
-        widgets are laid out before we raise_() above them.
-        """
-        if not self.standalone_mode:
-            return
-        if not (self.windowFlags() & Qt.WindowType.FramelessWindowHint):
-            return
-        if hasattr(self, '_corner_overlay') and self._corner_overlay:
-            self._corner_overlay.setGeometry(0, 0, self.width(), self.height())
-            self._corner_overlay.raise_()
-            self._corner_overlay.update_state(
-                getattr(self, 'hover_corner', None), self.app_settings)
-            return
-        overlay = _CornerOverlay(self)
-        overlay.update_state(getattr(self, 'hover_corner', None), self.app_settings)
-        self._corner_overlay = overlay
-        overlay.setGeometry(0, 0, self.width(), self.height())
-        overlay.show()
-        overlay.raise_()
-
-    def _refresh_corner_overlay(self): #vers 2
-        if hasattr(self, '_corner_overlay') and self._corner_overlay:
-            self._corner_overlay.setGeometry(0, 0, self.width(), self.height())
-            self._corner_overlay.update_state(
-                getattr(self, 'hover_corner', None), self.app_settings)
-            self._corner_overlay.raise_()
 
 
 #  Public factory function
@@ -30935,1142 +27522,25 @@ class ModelWorkshop(GLViewportMixin, ToolMenuMixin, QWidget): #vers 3
                 QPoint(size - a, 0), QPoint(size, 0), QPoint(size, a)]))
         p.end()
         return QIcon(px)
-class ZoomablePreview(QLabel): #vers 2
-    """Fixed preview widget with zoom and pan"""
-
-    def __init__(self, parent=None): #vers 1
-        self.icon_factory = SVGIconFactory()
-        super().__init__(parent)
-        self.main_window = parent
-        self.setMinimumSize(400, 400)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("border: 1px solid palette(mid);")
-        self.setMouseTracking(True)
-
-        # Display state
-        self.current_model = None
-        self.original_pixmap = None
-        self.scaled_pixmap = None
-
-        # View controls
-        self.zoom_level = 1.0
-        self.pan_offset = QPoint(0, 0)
-        self.rotation_x = 45  # X-axis rotation (up/down tilt)
-        self.rotation_y = 0   # Y-axis rotation (left/right spin)
-        self.rotation_z = 0   # Z-axis rotation (roll)
-
-        # View toggles
-        self.show_spheres = True
-        self.show_boxes = True
-        self.show_mesh = True
-
-        # Mouse interaction
-        self.dragging = False
-        self.drag_start = QPoint(0, 0)
-        self.drag_mode = None  # 'pan' or 'rotate'
-
-        # Background — theme-aware default
-        win = self.palette().color(self.palette().ColorRole.Window)
-        self.bg_color = self._get_ui_color('viewport_bg')
-
-        self.placeholder_text = "Select a collision model to preview"
-
-        self.background_mode = 'solid'
-        self._checkerboard_size = 16
-
-
-    def setPixmap(self, pixmap): #vers 2
-        """Set pixmap and update display"""
-        if pixmap and not pixmap.isNull():
-            self.original_pixmap = pixmap
-            self.placeholder_text = None
-            self._update_scaled_pixmap()
-        else:
-            self.original_pixmap = None
-            self.scaled_pixmap = None
-            self.placeholder_text = "No texture loaded"
-
-        self.update()  # Trigger repaint
-
-
-    def set_model(self, model): #vers 1
-        """Set collision model to display"""
-        self.current_model = model
-        self.render_collision()
-
-
-    def render_collision(self): #vers 2
-        """Render the collision model with current view settings"""
-        if not self.current_model:
-            self.setText(self.placeholder_text)
-            self.original_pixmap = None
-            self.scaled_pixmap = None
-            return
-
-        width = max(400, self.width())
-        height = max(400, self.height())
-
-        # Use the parent's render method
-        if hasattr(self.parent(), '_render_collision_preview'):
-            self.original_pixmap = self.parent()._render_collision_preview(
-                self.current_model,
-                width,
-                height
-            )
-        else:
-            # Fallback - just show text for now
-            name = getattr(self.current_model, 'name', 'Unknown')
-            self.setText(f"Collision Model: {name}\n\nRendering...")
-            return
-
-        self._update_scaled_pixmap()
-        self.update()
-
-
-    def _update_scaled_pixmap(self): #vers  #vers 1
-        """Update scaled pixmap based on zoom"""
-        if not self.original_pixmap:
-            self.scaled_pixmap = None
-            return
-
-        scaled_width = int(self.original_pixmap.width() * self.zoom_level)
-        scaled_height = int(self.original_pixmap.height() * self.zoom_level)
-
-        self.scaled_pixmap = self.original_pixmap.scaled(
-            scaled_width, scaled_height,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-
-
-    def paintEvent(self, event): #vers 2
-        """Paint the preview with background and image"""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-
-        # Draw background
-        if self.background_mode == 'checkerboard':
-            self._draw_checkerboard(painter)
-        else:
-            painter.fillRect(self.rect(), self.bg_color)
-
-        # Draw image if available
-        if self.scaled_pixmap and not self.scaled_pixmap.isNull():
-            # Calculate centered position with pan offset
-            x = (self.width() - self.scaled_pixmap.width()) // 2 + self.pan_offset.x()
-            y = (self.height() - self.scaled_pixmap.height()) // 2 + self.pan_offset.y()
-            painter.drawPixmap(x, y, self.scaled_pixmap)
-        elif self.placeholder_text:
-            # Draw placeholder text
-            painter.setPen(self._get_ui_color('viewport_text'))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.placeholder_text)
-
-
-    def set_checkerboard_background(self): #vers 1
-        """Enable checkerboard background"""
-        self.background_mode = 'checkerboard'
-        self.update()
-
-
-    def set_background_color(self, color): #vers 1
-        """Set solid background color"""
-        self.background_mode = 'solid'
-        self.bg_color = color
-        self.update()
-
-
-    def _draw_checkerboard(self, painter): #vers 1
-        """Draw checkerboard background pattern"""
-        size = self._checkerboard_size
-        color1 = self._get_ui_color('border')
-        color2 = self._get_ui_color('viewport_text')
-
-        for y in range(0, self.height(), size):
-            for x in range(0, self.width(), size):
-                color = color1 if ((x // size) + (y // size)) % 2 == 0 else color2
-                painter.fillRect(x, y, size, size, color)
-
-
-    # Zoom controls
-    def zoom_in(self): #vers 1
-        """Zoom in"""
-        self.zoom_level = min(5.0, self.zoom_level * 1.2)
-        self._update_scaled_pixmap()
-        self.update()
-
-
-    def zoom_out(self): #vers 1
-        """Zoom out"""
-        self.zoom_level = max(0.1, self.zoom_level / 1.2)
-        self._update_scaled_pixmap()
-        self.update()
-
-
-    def reset_view(self): #vers 1
-        """Reset to default view"""
-        self.zoom_level = 1.0
-        self.pan_offset = QPoint(0, 0)
-        self.rotation_x = 45
-        self.rotation_y = 0
-        self.rotation_z = 0
-        self.render_collision()
-
-
-    def fit_to_window(self): #vers 2
-        """Fit image to window size"""
-        if not self.original_pixmap:
-            return
-
-        img_size = self.original_pixmap.size()
-        widget_size = self.size()
-
-        zoom_w = widget_size.width() / img_size.width()
-        zoom_h = widget_size.height() / img_size.height()
-
-        self.zoom_level = min(zoom_w, zoom_h) * 0.95
-        self.pan_offset = QPoint(0, 0)
-        self._update_scaled_pixmap()
-        self.update()
-
-
-    def pan(self, dx, dy): #vers 1
-        """Pan the view by dx, dy pixels"""
-        self.pan_offset += QPoint(dx, dy)
-        self.update()
-
-
-    # Rotation controls
-    def rotate_x(self, degrees): #vers 1
-        """Rotate around X axis"""
-        self.rotation_x = (self.rotation_x + degrees) % 360
-        self.render_collision()
-
-
-    def rotate_y(self, degrees): #vers 1
-        """Rotate around Y axis"""
-        self.rotation_y = (self.rotation_y + degrees) % 360
-        self.render_collision()
-
-
-    def rotate_z(self, degrees): #vers 1
-        """Rotate around Z axis"""
-        self.rotation_z = (self.rotation_z + degrees) % 360
-        self.render_collision()
-
-
-    # Mouse events
-    def mousePressEvent(self, event): #vers 1
-        """Handle mouse press"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = True
-            self.drag_start = event.pos()
-            self.drag_mode = 'rotate' if event.modifiers() & Qt.KeyboardModifier.ControlModifier else 'pan'
-
-
-    def mouseMoveEvent(self, event): #vers 1
-        """Handle mouse drag"""
-        if self.dragging:
-            delta = event.pos() - self.drag_start
-
-            if self.drag_mode == 'rotate':
-                # Rotate based on drag
-                self.rotate_y(delta.x() * 0.5)
-                self.rotate_x(-delta.y() * 0.5)
-            else:
-                # Pan
-                self.pan_offset += delta
-                self.update()
-
-            self.drag_start = event.pos()
-
-
-    def mouseReleaseEvent(self, event): #vers 1
-        """Handle mouse release"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = False
-            self.drag_mode = None
-
-
-    def wheelEvent(self, event): #vers 1
-        """Handle mouse wheel for zoom"""
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self.zoom_in()
-        else:
-            self.zoom_out()
-
-
-class COLEditorDialog(QDialog): #vers 3
-    """Enhanced COL Editor Dialog"""
-
-
-    def __init__(self, parent=None): #vers 1
-        self.icon_factory = SVGIconFactory()
-        super().__init__(parent)
-        self.setWindowTitle(App_name)
-        self.setModal(False)  # Allow non-modal operation
-        self.resize(1000, 700)
-
-        self.current_file = None
-        self.current_model = None
-        self.file_path = None
-        self.is_modified = False
-
-        self.setup_ui()
-        self.connect_signals()
-
-        print(App_name + " dialog created")
-
-
-    def setup_ui(self): #vers 1
-        """Setup editor UI"""
-        layout = QVBoxLayout(self)
-
-        # Toolbar
-        self.toolbar = COLToolbar(self)
-        layout.addWidget(self.toolbar)
-
-        # Main splitter
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        layout.addWidget(main_splitter)
-
-        # Left panel - Model list and properties
-        left_panel = QSplitter(Qt.Orientation.Vertical)
-        left_panel.setFixedWidth(350)
-
-        # Model list
-        models_group = QGroupBox("Models")
-        models_layout = QVBoxLayout(models_group)
-
-        self.model_list = ModelListWidget()
-        models_layout.addWidget(self.model_list)
-
-        left_panel.addWidget(models_group)
-
-        # Properties
-        properties_group = QGroupBox("Properties")
-        properties_layout = QVBoxLayout(properties_group)
-
-        self.properties_widget = COLPropertiesWidget()
-        properties_layout.addWidget(self.properties_widget)
-
-        left_panel.addWidget(properties_group)
-
-        # Set left panel sizes
-        left_panel.setSizes([200, 400])
-
-        main_splitter.addWidget(left_panel)
-
-        # Right panel - 3D viewer
-        viewer_group = QGroupBox("3D Viewer")
-        viewer_layout = QVBoxLayout(viewer_group)
-
-        if VIEWPORT_AVAILABLE:
-            self.viewer_3d = COL3DViewport()
-            viewer_layout.addWidget(self.viewer_3d)
-
-            # Add 3DS Max style controls at bottom
-            controls = self._create_viewport_controls()
-            viewer_layout.addWidget(controls)
-        else:
-            self.viewer_3d = QLabel("3D Viewport unavailable\nInstall: pip install PyOpenGL")
-            self.viewer_3d.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            viewer_layout.addWidget(self.viewer_3d)
-
-        # Set main splitter sizes
-        main_splitter.setSizes([350, 650])
-
-        # Status bar
-        self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Ready")
-        layout.addWidget(self.status_bar)
-
-        # Progress bar (hidden by default)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-
-
-    def connect_signals(self): #vers 1
-        """Connect UI signals"""
-        # Toolbar actions
-        self.toolbar.open_action.triggered.connect(self.open_file)
-        self.toolbar.save_action.triggered.connect(self.save_file)
-        self.toolbar.analyze_action.triggered.connect(self.analyze_file)
-
-        # View options
-        self.toolbar.view_spheres_action.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_spheres=checked)
-        )
-        self.toolbar.view_boxes_action.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_boxes=checked)
-        )
-        self.toolbar.view_mesh_action.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_mesh=checked)
-        )
-
-        # Model selection
-        self.model_list.model_selected.connect(self.on_model_selected)
-        self.viewer_3d.model_selected.connect(self.on_model_selected)
-
-        # Properties changes
-        self.properties_widget.property_changed.connect(self.on_property_changed)
-
-
-    def load_col_file(self, file_path: str) -> bool: #vers 2
-        """Load COL file - ENHANCED VERSION"""
-        try:
-            self.file_path = file_path
-            self.status_bar.showMessage("Loading COL file...")
-            self.progress_bar.setVisible(True)
-
-            # Load the file
-            self.current_file = COLFile(file_path)
-
-            if not self.current_file.load():
-                error_msg = getattr(self.current_file, 'load_error', 'Unknown error')
-                QMessageBox.critical(self, "Load Error", f"Failed to load COL file:\n{error_msg}")
-                self.progress_bar.setVisible(False)
-                self.status_bar.showMessage("Ready")
-                return False
-
-            # Update UI
-            self.model_list.set_col_file(self.current_file)
-            self.viewer_3d.set_current_file(self.current_file)
-
-            # Select first model if available
-            if hasattr(self.current_file, 'models') and self.current_file.models:
-                self.model_list.setCurrentRow(0)
-
-            model_count = len(getattr(self.current_file, 'models', []))
-            self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)} ({model_count} models)")
-            self.progress_bar.setVisible(False)
-
-            self.setWindowTitle(f"COL Editor - {os.path.basename(file_path)}")
-            self.is_modified = False
-
-            print(f"COL file loaded: {file_path}")
-            return True
-
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            self.status_bar.showMessage("Ready")
-            error_msg = f"Error loading COL file: {str(e)}"
-            QMessageBox.critical(self, "Error", error_msg)
-            print(error_msg)
-            return False
-
-
-    def open_file(self): #vers 1
-        """Open file dialog"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open COL File", "", "COL Files (*.col);;All Files (*)"
-        )
-
-        if file_path:
-            self.load_col_file(file_path)
-
-
-    def save_file(self): #vers 1
-        """Save current file"""
-        if not self.current_file:
-            QMessageBox.warning(self, "Save", "No file loaded to save")
-            return
-
-        if not self.file_path:
-            self.save_file_as()
-            return
-
-        try:
-            self.status_bar.showMessage("Saving COL file...")
-
-            # Route to actual save method
-            if getattr(self, 'current_col_file', None):
-                self._save_file()
-            elif getattr(self, '_current_dff_model', None):
-                self._save_dff_file()
-            else:
-                QMessageBox.information(self, "Save",
-                    "Load a model first before saving.")
-
-            self.status_bar.showMessage("Ready")
-
-        except Exception as e:
-            error_msg = f"Error saving COL file: {str(e)}"
-            QMessageBox.critical(self, "Save Error", error_msg)
-            print(error_msg)
-
-
-    def save_file_as(self): #vers 1
-        """Save file as dialog"""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save COL File", "", "COL Files (*.col);;All Files (*)"
-        )
-
-        if file_path:
-            self.file_path = file_path
-            self.save_file()
-
-
-    def analyze_file(self): #vers 1
-        """Analyze current COL file"""
-        if not self.current_file or not self.file_path:
-            QMessageBox.warning(self, "Analyze", "No file loaded to analyze")
-            return
-
-        try:
-            self.status_bar.showMessage("Analyzing COL file...")
-
-            # Import locally when needed
-            from apps.components.Model_Editor.depends.col_operations import get_col_detailed_analysis
-            from gui.col_dialogs import show_col_analysis_dialog
-
-            self.status_bar.showMessage("Analyzing COL file...")
-
-            # Get detailed analysis
-            analysis_data = get_col_detailed_analysis(self.file_path)
-
-            if 'error' in analysis_data:
-                QMessageBox.warning(self, "Analysis Error", f"Analysis failed: {analysis_data['error']}")
-                return
-
-            # Show analysis dialog
-            show_col_analysis_dialog(self, analysis_data, os.path.basename(self.file_path))
-
-            self.status_bar.showMessage("Ready")
-
-        except Exception as e:
-            error_msg = f"Error analyzing COL file: {str(e)}"
-            QMessageBox.critical(self, "Analysis Error", error_msg)
-            print(error_msg)
-
-
-    def on_model_selected(self, model_index: int): #vers 1
-        """Handle model selection"""
-        try:
-            if not self.current_file or not hasattr(self.current_file, 'models'):
-                return
-
-            if model_index < 0 or model_index >= len(self.current_file.models):
-                return
-
-            # Update current model
-            self.current_model = self.current_file.models[model_index]
-
-            # Update viewer
-            self.viewer_3d.set_current_model(self.current_model, model_index)
-
-            # Update properties
-            self.properties_widget.set_current_model(self.current_model)
-
-            # Update list selection if needed
-            if self.model_list.currentRow() != model_index:
-                self.model_list.setCurrentRow(model_index)
-
-            model_name = getattr(self.current_model, 'name', f'Model_{model_index}')
-            self.status_bar.showMessage(f"Selected: {model_name}")
-
-            print(f"Model selected: {model_name} (index {model_index})")
-
-        except Exception as e:
-            print(f"Error selecting model: {str(e)}")
-
-
-    def _create_viewport_controls(self): #vers 1
-        icon_color = self._get_icon_color()
-        """Create 3D viewport controls - 3DS Max style toolbar at bottom"""
-        if not VIEWPORT_AVAILABLE:
-            return QWidget()
-
-        controls_widget = QFrame()
-        controls_widget.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
-        controls_widget.setStyleSheet("""
-            QFrame {
-                background-color: palette(mid);
-                border: 1px solid palette(mid);
-                border-radius: 3px;
-                padding: 3px;
-            }
-            QPushButton {
-                background-color: palette(mid);
-                border: 1px solid palette(mid);
-                border-radius: 2px;
-                padding: 4px;
-                min-width: 28px;
-                min-height: 28px;
-            }
-            QPushButton:hover {
-                background-color: palette(mid);
-                border: 1px solid palette(placeholderText);
-            }
-            QPushButton:pressed {
-                background-color: palette(base);
-            }
-            QPushButton:checked {
-                background-color: #006699;
-                border: 1px solid #0088cc;
-            }
-        """)
-
-        layout = QHBoxLayout(controls_widget)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(2)
-
-        # View mode buttons
-        btn_spheres = QPushButton()
-        btn_spheres.setIcon(self.icon_factory.sphere_icon(color=icon_color))
-        btn_spheres.setCheckable(True)
-        btn_spheres.setChecked(True)
-        btn_spheres.setToolTip("Toggle Spheres")
-        btn_spheres.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_spheres=checked)
-        )
-
-        btn_boxes = QPushButton()
-        btn_boxes.setIcon(self.icon_factory.box_icon(color=icon_color))
-        btn_boxes.setCheckable(True)
-        btn_boxes.setChecked(True)
-        btn_boxes.setToolTip("Toggle Boxes")
-        btn_boxes.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_boxes=checked)
-        )
-
-        btn_mesh = QPushButton()
-        btn_mesh.setIcon(self.icon_factory.mesh_icon(color=icon_color))
-        btn_mesh.setCheckable(True)
-        btn_mesh.setChecked(True)
-        btn_mesh.setToolTip("Toggle Mesh")
-        btn_mesh.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_mesh=checked)
-        )
-
-        btn_wireframe = QPushButton()
-        btn_wireframe.setIcon(self.icon_factory.wireframe_icon(color=icon_color))
-        btn_wireframe.setCheckable(True)
-        btn_wireframe.setChecked(True)
-        btn_wireframe.setToolTip("Toggle Wireframe")
-        btn_wireframe.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_wireframe=checked)
-        )
-
-        btn_bounds = QPushButton()
-        btn_bounds.setIcon(self.icon_factory.bounds_icon(color=icon_color))
-        btn_bounds.setCheckable(True)
-        btn_bounds.setChecked(True)
-        btn_bounds.setToolTip("Toggle Bounding Box")
-        btn_bounds.toggled.connect(
-            lambda checked: self.viewer_3d.set_view_options(show_bounds=checked)
-        )
-
-        # Separator
-        separator1 = QFrame()
-        separator1.setFrameShape(QFrame.Shape.VLine)
-        separator1.setFrameShadow(QFrame.Shadow.Sunken)
-        separator1.setStyleSheet("color: palette(mid);")
-
-        # Camera controls
-        btn_reset = QPushButton()
-        btn_reset.setIcon(self.icon_factory.reset_view_icon(color=icon_color))
-        btn_reset.setToolTip("Reset View")
-        btn_reset.clicked.connect(self.viewer_3d.reset_view)
-
-        btn_top = QPushButton("T")
-        btn_top.setToolTip("Top View")
-        btn_top.clicked.connect(lambda: self._set_camera_view('top'))
-
-        btn_front = QPushButton("F")
-        btn_front.setToolTip("Front View")
-        btn_front.clicked.connect(lambda: self._set_camera_view('front'))
-
-        btn_side = QPushButton("S")
-        btn_side.setToolTip("Side View")
-        btn_side.clicked.connect(lambda: self._set_camera_view('side'))
-
-        # Add widgets to layout
-        layout.addWidget(btn_spheres)
-        layout.addWidget(btn_boxes)
-        layout.addWidget(btn_mesh)
-        layout.addWidget(btn_wireframe)
-        layout.addWidget(btn_bounds)
-        layout.addWidget(separator1)
-        layout.addWidget(btn_reset)
-        layout.addWidget(btn_top)
-        layout.addWidget(btn_front)
-        layout.addWidget(btn_side)
-        layout.addStretch()
-
-        return controls_widget
-
-
-    def _set_camera_view(self, view_type): #vers 1
-        """Set predefined camera view"""
-        if not VIEWPORT_AVAILABLE or not hasattr(self, 'viewer_3d'):
-            return
-
-        if view_type == 'top':
-            self.viewer_3d.rotation_x = 0.0
-            self.viewer_3d.rotation_y = 0.0
-        elif view_type == 'front':
-            self.viewer_3d.rotation_x = 90.0
-            self.viewer_3d.rotation_y = 0.0
-        elif view_type == 'side':
-            self.viewer_3d.rotation_x = 90.0
-            self.viewer_3d.rotation_y = 90.0
-
-        self.viewer_3d.update()
-
-
-    def _svg_to_icon(self, svg_data, size=24): #vers 1
-        """Convert SVG to QIcon"""
-        from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
-        from PyQt6.QtSvg import QSvgRenderer
-        from PyQt6.QtCore import QByteArray
-
-        try:
-            text_color = self.palette().color(self.foregroundRole())
-            svg_str = svg_data.decode('utf-8')
-            svg_str = svg_str.replace('currentColor', text_color.name())
-            svg_data = svg_str.encode('utf-8')
-
-            renderer = QSvgRenderer(QByteArray(svg_data))
-            if not renderer.isValid():
-                print(f"Invalid SVG data in col_workshop")
-                return QIcon()
-
-            pixmap = QPixmap(size, size)
-            pixmap.fill(QColor(0, 0, 0, 0))
-
-            painter = QPainter(pixmap)
-            renderer.render(painter)
-            painter.end()
-
-            return QIcon(pixmap)
-        except:
-            return QIcon()
-
-
-    def on_property_changed(self, property_name: str, new_value): #vers 2
-        """Handle property changes from properties widget"""
-        try:
-            if not self.current_file or not hasattr(self.current_file, 'models'):
-                return
-
-            selected_index = self.model_list.currentRow()
-            if selected_index < 0 or selected_index >= len(self.current_file.models):
-                return
-
-            current_model = self.current_file.models[selected_index]
-
-            # Update model properties
-            if property_name == 'name':
-                current_model.name = str(new_value)
-                self.model_list.item(selected_index).setText(new_value)
-            elif property_name == 'version':
-                current_model.version = new_value
-            elif property_name == 'material':
-                if hasattr(current_model, 'material'):
-                    current_model.material = new_value
-
-            # Mark as modified
-            self.is_modified = True
-            self.status_bar.showMessage(f"Modified: {property_name} changed")
-
-            # Update viewer if needed
-            if hasattr(self, 'viewer_3d') and VIEWPORT_AVAILABLE:
-                self.viewer_3d.set_current_model(current_model, selected_index)
-
-            print(f"Property changed: {property_name} = {new_value}")
-
-        except Exception as e:
-            print(f"Error handling property change: {str(e)}")
-            self.status_bar.showMessage(f"Error: {str(e)}")
-
-
-    def _set_camera_view(self, view_type): #vers 1
-            """Set predefined camera view"""
-            if view_type == 'top':
-                self.viewer_3d.rotation_x = 0.0
-                self.viewer_3d.rotation_y = 0.0
-            elif view_type == 'front':
-                self.viewer_3d.rotation_x = 90.0
-                self.viewer_3d.rotation_y = 0.0
-            elif view_type == 'side':
-                self.viewer_3d.rotation_x = 90.0
-                self.viewer_3d.rotation_y = 90.0
-
-            self.viewer_3d.update()
-
-
-
-    def closeEvent(self, event): #vers 1
-        """Handle close event"""
-        if self.is_modified:
-            reply = QMessageBox.question(
-                self, "Unsaved Changes",
-                "The file has unsaved changes. Do you want to save before closing?",
-                QMessageBox.StandardButton.Save |
-                QMessageBox.StandardButton.Discard |
-                QMessageBox.StandardButton.Cancel
-            )
-
-            if reply == QMessageBox.StandardButton.Save:
-                self.save_file()
-                event.accept()
-            elif reply == QMessageBox.StandardButton.Discard:
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.accept()
-
-        print("COL Editor dialog closed")
-
-
-    # Add import/export functionality when docked
-    def _add_import_export_functionality(self): #vers 1
-        """Add import/export functionality when docked to img factory"""
-        try:
-            # Only add these when docked to img factory
-            if self.main_window and hasattr(self.main_window, 'log_message'):
-                # Add import button to toolbar if not already present
-                if not hasattr(self, 'import_btn'):
-                    # Import button would be added to the toolbar in _create_toolbar
-                    pass
-                    
-                # Add export button to toolbar if not already present
-                if not hasattr(self, 'export_btn'):
-                    # Export button would be added to the toolbar in _create_toolbar
-                    pass
-                    
-                self.main_window.log_message(f"{App_name} import/export functionality ready")
-                
-        except Exception as e:
-            print(f"Error adding import/export functionality: {str(e)}")
-
-
-    def _import_col_data(self): #vers 2
-        """Import one or more COL models from .col file(s) into the current archive."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        if not getattr(self, "current_col_file", None):
-            # No file loaded yet — open the files directly
-            self._open_file()
-            return
-
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Import COL File(s)", "",
-            "COL Files (*.col);;All Files (*)")
-        if not paths:
-            return
-
-        from apps.components.Model_Editor.depends.col_workshop_loader import COLFile
-        added = 0
-        for path in paths:
-            cf = COLFile()
-            if cf.load_from_file(path):
-                for model in cf.models:
-                    self.current_col_file.models.append(model)
-                    added += 1
-            else:
-                print(f"Import failed: {path}")
-
-        if added:
-            self._populate_collision_list()
-            self._populate_compact_col_list()
-            # Select last added
-            last = len(self.current_col_file.models) - 1
-            active = (self.mod_compact_list
-                      if getattr(self,'_col_view_mode','list')=='detail'
-                      else self.collision_list)
-            if active.rowCount() > last:
-                active.selectRow(last)
-            msg = f"Imported {added} model(s) from {len(paths)} file(s)."
-            self._set_status(msg)
-            if self.main_window and hasattr(self.main_window,'log_message'):
-                self.main_window.log_message(msg)
-        else:
-            QMessageBox.warning(self, "Import", "No models could be imported.")
 
 
     # _export_col_data implemented above (line ~5136) — this stub removed
 
 
 # Convenience functions
-def open_col_editor(parent=None, file_path: str = None) -> COLEditorDialog: #vers 2
-    """Open COL editor dialog - ENHANCED VERSION"""
-    try:
-        editor = COLEditorDialog(parent)
-
-        if file_path:
-            if editor.load_col_file(file_path):
-                print(f"COL editor opened with file: {file_path}")
-            else:
-                print(f"Failed to load file in COL editor: {file_path}")
-
-        editor.show()
-        return editor
-
-    except Exception as e:
-        print(f"Error opening COL editor: {str(e)}")
-        if parent:
-            QMessageBox.critical(parent, "COL Editor Error", f"Failed to open COL editor:\n{str(e)}")
-        return None
-
-
-def create_new_model(model_name: str = "New Model") -> COLModel: #vers 1
-
-    try:
-        model = COLModel()
-        model.name = model_name
-        model.version = COLVersion.COL_2  # Default to COL2
-        model.spheres = []
-        model.boxes = []
-        model.vertices = []
-        model.faces = []
-
-        # Initialize bounding box
-        if hasattr(model, 'calculate_bounding_box'):
-            model.calculate_bounding_box()
-
-        print(f"Created new COL model: {model_name}")
-        return model
-
-    except Exception as e:
-        print(f"Error creating new COL model: {str(e)}")
-        return None
-
-
-def delete_model(col_file: COLFile, model_index: int) -> bool: #vers 1
-    """Delete model from COL file"""
-    try:
-        if not hasattr(col_file, 'models') or not col_file.models:
-            return False
-
-        if model_index < 0 or model_index >= len(col_file.models):
-            return False
-
-        model_name = getattr(col_file.models[model_index], 'name', f'Model_{model_index}')
-        del col_file.models[model_index]
-
-        print(f"Deleted COL model: {model_name}")
-        return True
-
-    except Exception as e:
-        print(f"Error deleting COL model: {str(e)}")
-        return False
-
-
-def export_model(model: COLModel, file_path: str) -> bool: #vers 1
-    """Export single COL model to file.
-    Supports .col (binary), .obj (Wavefront), .csv (verts+faces).
-    Full implementation wired through COL Workshop export pipeline."""
-    try:
-        import struct, os
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == '.col':
-            # Binary COL2 export
-            verts = getattr(model, 'vertices', [])
-            faces = getattr(model, 'faces', [])
-            if not verts or not faces:
-                return False
-            name = (getattr(model, 'name', 'model') or 'model').encode()[:22].ljust(22, b'\x00')
-            vert_data = b''.join(
-                struct.pack('<hhh',
-                    max(-32767, min(32767, int(v.x*128))),
-                    max(-32767, min(32767, int(v.y*128))),
-                    max(-32767, min(32767, int(v.z*128))))
-                for v in verts)
-            face_data = b''.join(
-                struct.pack('<HHHBBBB', f.a, f.b, f.c, 0, 0, 0, 0)
-                for f in faces)
-            xs = [v.x for v in verts]; ys = [v.y for v in verts]; zs = [v.z for v in verts]
-            cx,cy,cz = sum(xs)/len(xs), sum(ys)/len(ys), sum(zs)/len(zs)
-            r = max(((v.x-cx)**2+(v.y-cy)**2+(v.z-cz)**2)**0.5 for v in verts)
-            payload  = struct.pack('<fff', min(xs),min(ys),min(zs))
-            payload += struct.pack('<fff', max(xs),max(ys),max(zs))
-            payload += struct.pack('<fff', cx,cy,cz)
-            payload += struct.pack('<f', r)
-            payload += struct.pack('<HHHHHH', 0, 0, len(faces), 0, len(verts), 0)
-            vert_off = 0x68
-            face_off = vert_off + len(verts)*6
-            payload += struct.pack('<IIII', vert_off, face_off, 0, 0)
-            while len(payload) < 0x68 - 4: payload += b'\x00\x00\x00\x00'
-            payload += vert_data + face_data
-            block = b'COL\x02' + struct.pack('<I', 4+22+2+len(payload))
-            block += name + struct.pack('<H', getattr(model,'model_id',0)) + payload
-            with open(file_path, 'wb') as f: f.write(block)
-            return True
-        elif ext == '.obj':
-            lines = ['# Exported by IMG Factory Model Workshop']
-            verts = getattr(model, 'vertices', [])
-            faces = getattr(model, 'faces', [])
-            for v in verts: lines.append(f'v {v.x:.6f} {v.y:.6f} {v.z:.6f}')
-            for f in faces: lines.append(f'f {f.a+1} {f.b+1} {f.c+1}')
-            with open(file_path, 'w') as f: f.write('\n'.join(lines))
-            return True
-        return False
-    except Exception as e:
-        print(f"Error exporting model: {e}")
-        return False
-
-
-def import_elements(model: COLModel, file_path: str) -> bool: #vers 1
-    """Import collision elements from OBJ/COL file into model.
-    Adds vertices and faces from file to the model's geometry."""
-    try:
-        import os
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == '.obj':
-            verts, faces = [], []
-            with open(file_path) as f:
-                for line in f:
-                    p = line.split()
-                    if not p: continue
-                    if p[0] == 'v' and len(p) >= 4:
-                        from apps.components.Model_Editor.depends.col_core_classes import COLVertex
-                        verts.append(COLVertex(float(p[1]), float(p[2]), float(p[3])))
-                    elif p[0] == 'f' and len(p) >= 4:
-                        from apps.components.Model_Editor.depends.col_core_classes import COLFace
-                        # OBJ faces are 1-indexed
-                        base = len(model.vertices) if hasattr(model,'vertices') else 0
-                        ia = int(p[1].split('/')[0]) - 1
-                        ib = int(p[2].split('/')[0]) - 1
-                        ic = int(p[3].split('/')[0]) - 1
-                        faces.append(COLFace(ia+base, ib+base, ic+base, 0, 0))
-            if hasattr(model, 'vertices'):
-                model.vertices.extend(verts)
-            if hasattr(model, 'faces'):
-                model.faces.extend(faces)
-            return bool(verts and faces)
-        return False
-    except Exception as e:
-        print(f"Error importing elements: {e}")
-        return False
-
-
-def refresh_model_list(list_widget: ModelListWidget, col_file: COLFile): #vers 1
-    """Refresh model list widget"""
-    try:
-        list_widget.set_col_file(col_file)
-        print("Model list refreshed")
-
-    except Exception as e:
-        print(f"Error refreshing model list: {str(e)}")
-
-
-def update_view_options(viewer: 'COL3DViewport', **options): #vers 1
-    """Update 3D viewer options"""
-    try:
-        viewer.set_view_options(**options)
-        print(f"View options updated: {options}")
-    except Exception as e:
-        print(f"Error updating view options: {str(e)}")
-
-
-# (moved into ModelWorkshop class — see _ensure_standalone_functionality method above)
 
 
 
-def apply_changes(editor: COLEditorDialog) -> bool: #vers 1
-    """Apply all pending changes — refresh UI from current model state."""
-    try:
-        if hasattr(editor, '_populate_collision_list'):
-            editor._populate_collision_list()
-        if hasattr(editor, '_populate_compact_col_list'):
-            editor._populate_compact_col_list()
-        vp = getattr(editor, 'preview_widget', None)
-        if vp:
-            vp.update()
-        return True
-    except Exception as e:
-        print(f"Error applying changes: {e}")
-        return False
 
 
-# --- External AI upscaler integration helper ---
-import subprocess
-import tempfile
-import shutil
-import sys
 
 
-def open_model_workshop(main_window, dff_path=None,
-                        original_dff_name=None): #vers 5
-    """Open Model Workshop — routes DFF/COL/IMG correctly.
-    original_dff_name: the DFF entry name from the IMG (e.g. 'airportwall_2_2.dff')
-    so that IDE lookup works even when the DFF was extracted to /tmp/ with a random suffix."""
-    try:
-        # Try to dock in main window tab if available
-        if main_window and hasattr(main_window, 'main_tab_widget'):
-            import os as _os
-            from PyQt6.QtWidgets import QWidget, QVBoxLayout
-            container = QWidget()
-            layout = QVBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            workshop = ModelWorkshop(container, main_window)
-            workshop.setWindowFlags(Qt.WindowType.Widget)
-            layout.addWidget(workshop)
-            tab_label = _os.path.splitext(_os.path.basename(dff_path))[0] if dff_path else "Map Workshop"
-            try:
-                from apps.methods.imgfactory_svg_icons import get_dff_edit_icon
-                icon = get_dff_edit_icon()
-                idx = main_window.main_tab_widget.addTab(container, icon, tab_label)
-            except Exception:
-                idx = main_window.main_tab_widget.addTab(container, tab_label)
-            main_window.main_tab_widget.setCurrentIndex(idx)
-            if hasattr(main_window, '_ensure_tab_area_visible'):
-                main_window._ensure_tab_area_visible()
-            workshop.show()
-        else:
-            # Standalone window
-            workshop = ModelWorkshop(main_window=main_window)
-            workshop.setWindowFlags(Qt.WindowType.Window)
-            workshop.setWindowTitle(f"Model Workshop — {App_name}")
-            workshop.resize(1200, 800)
-            workshop.show()
 
-        # Store source IMG path — DFFs extracted to /tmp lose game context
-        if main_window:
-            _ci = getattr(main_window, 'current_img', None)
-            if _ci:
-                _sp = getattr(_ci, 'file_path', '') or ''
-                if _sp:
-                    workshop._source_img_path = _sp
 
-        # Store original DFF name BEFORE open_dff_file so _lookup_ide_for_dff sees it
-        if original_dff_name:
-            workshop._original_dff_name = original_dff_name
 
-        # Route the file
-        if dff_path:
-            ext = dff_path.lower()
-            if ext.endswith('.dff'):
-                workshop.open_dff_file(dff_path)
-            elif ext.endswith('.col'):
-                workshop.open_col_file(dff_path)
-            elif ext.endswith('.img'):
-                workshop.load_from_img_archive(dff_path)
-            elif ext.endswith('.dat'):
-                # DAT Browser (or any other caller) opening Map Workshop
-                # with a specific .dat path - route to the real map-load
-                # logic instead of falling through to nothing, matching
-                # what the Open button's dialog already does for .dat.
-                workshop._load_game_dat_file(dff_path)
-        else:
-            # No explicit file — use already-open IMG from main window directly
-            if main_window:
-                img = getattr(main_window, 'current_img', None)
-                if img and hasattr(img, 'entries'):
-                    workshop._populate_left_panel_from_img(img)
-                if hasattr(main_window, 'log_message'):
-                    main_window.log_message("Model Workshop opened")
 
-        return workshop
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        if main_window and hasattr(main_window, 'log_message'):
-            main_window.log_message(f"Model Workshop error: {e}")
-        return None
+
+
 
 def open_map_workshop(main_window, game_root=None, dat_path=None, force_preload_img=False): #vers 2
     """Open Map Workshop and load a GTA world - either a whole game
@@ -32119,68 +27589,8 @@ def open_map_workshop(main_window, game_root=None, dat_path=None, force_preload_
             main_window.log_message(f"Map Workshop error: {e}")
         return None
 
-def open_workshop(main_window, img_path=None): #vers 4
-    """Legacy wrapper — calls open_model_workshop."""
-    return open_model_workshop(main_window, img_path)
 
 
-def open_col_workshop(main_window, img_path=None): #vers 2
-    """Open COL Workshop - embedded in tab if main_window has tab widget, standalone otherwise"""
-    try:
-        from PyQt6.QtWidgets import QVBoxLayout, QWidget
-
-        # Standalone mode
-        if not main_window or not hasattr(main_window, 'main_tab_widget'):
-            workshop = ModelWorkshop(None, main_window)
-            workshop.setWindowFlags(Qt.WindowType.Window)
-            if img_path and img_path.lower().endswith('.dff'):
-                if hasattr(workshop, 'open_dff_file'):
-                    workshop.open_dff_file(img_path)
-                elif hasattr(workshop, 'load_dff_file'):
-                    workshop.load_dff_file(img_path)
-            workshop.setWindowTitle(f"Model Workshop - {App_name}")
-            workshop.resize(1200, 800)
-            workshop.show()
-            return workshop
-
-        # Embedded mode - add as tab
-        import os
-        tab_container = QWidget()
-        tab_layout = QVBoxLayout(tab_container)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-
-        workshop = ModelWorkshop(tab_container, main_window)
-        workshop.setWindowFlags(Qt.WindowType.Widget)
-        tab_layout.addWidget(workshop)
-
-        if img_path and img_path.lower().endswith('.dff'):
-            if hasattr(workshop, 'open_dff_file'):
-                workshop.open_dff_file(img_path)
-            elif hasattr(workshop, 'load_dff_file'):
-                workshop.load_dff_file(img_path)
-
-        tab_label = os.path.splitext(os.path.basename(img_path))[0] if img_path else "Map Workshop"
-        try:
-            from apps.methods.imgfactory_svg_icons import get_model_file_icon
-            icon = get_model_file_icon()
-            idx = main_window.main_tab_widget.addTab(tab_container, icon, tab_label)
-        except Exception:
-            idx = main_window.main_tab_widget.addTab(tab_container, tab_label)
-        main_window.main_tab_widget.setCurrentIndex(idx)
-        if hasattr(main_window, '_ensure_tab_area_visible'):
-            main_window._ensure_tab_area_visible()
-
-        workshop.show()
-        return workshop
-
-    except Exception as e:
-        if main_window and hasattr(main_window, 'log_message'):
-            main_window.log_message(f"Error opening Model Workshop: {str(e)}")
-        return None
-
-MDLEditorDialog = ModelWorkshop
-MODWorkshop     = ModelWorkshop
-ModelWorkshopDialog = ModelWorkshop
 
 if __name__ == "__main__":
     import sys

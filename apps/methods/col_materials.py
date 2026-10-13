@@ -1,4 +1,4 @@
-#this belongs in apps/methods/col_materials.py - Version: 1
+#this belongs in apps/methods/col_materials.py - Version: 4
 # X-Seti - March29 2026 - IMG Factory 1.6 - COL Material Definitions
 # Reference: DragonFF col_materials.py (Parik, GPL-2.0+)
 """
@@ -12,11 +12,14 @@ Usage:
     )
 
 ##Functions list -
+# convert_material_id
+# convert_piece_flag
 # get_material_name
 # get_material_colour
 # get_material_group
 # get_materials_for_version
 # get_vehicle_presets
+# material_from_texture
 # material_id_from_name
 
 ##Data list -
@@ -487,7 +490,75 @@ def material_id_from_name(name: str, game: COLGame = COLGame.SA) -> Optional[int
     return None
 
 
+def material_from_texture(texture: str, game: COLGame = COLGame.SA) -> Optional[int]: #vers 1
+    """Surface id guessed from a texture name (grass, sand, wood...), or None."""
+    t = (texture or '').lower()
+    for words, sa_id, vc_id in _TEXTURE_SURFACES:
+        if any(w in t for w in words):
+            return sa_id if game == COLGame.SA else vc_id
+    return None
+
+
+def convert_material_id(material_id: int, from_game: COLGame, to_game: COLGame) -> int: #vers 1
+    """Map a surface id between games: same name, else same group."""
+    if from_game == to_game or (from_game != COLGame.SA and to_game != COLGame.SA):
+        return material_id
+    same = material_id_from_name(get_material_name(material_id, from_game), to_game)
+    if same is not None:
+        return same
+    group = get_material_group(material_id, from_game)
+    preset = COL_PRESET_SA if to_game == COLGame.SA else COL_PRESET_VC
+    cands = [(mat_id, name) for grp, _, mat_id, name, is_proc in preset
+             if grp == group and not is_proc and mat_id != 0]
+    for word in _GROUP_WORDS.get(COLGroup(int(group)), ()):
+        hits = [c for c in cands if word in c[1].lower()]
+        if hits:
+            return min(hits, key=lambda c: len(c[1]))[0]
+    return cands[0][0] if cands else 0
+
+
+def convert_piece_flag(flag: int, from_game: COLGame, to_game: COLGame) -> int: #vers 1
+    """Vehicle piece flag between games (windscreen VC 17, SA 19)."""
+    if (from_game == COLGame.SA) == (to_game == COLGame.SA):
+        return flag
+    if from_game == COLGame.SA and flag == int(COLFlagSA.WIND_SH):
+        return int(COLFlagVC.WIND_SH)
+    if to_game == COLGame.SA and flag == int(COLFlagVC.WIND_SH):
+        return int(COLFlagSA.WIND_SH)
+    return flag
+
+
+_GROUP_WORDS = {
+    COLGroup.ROAD: ('tarmac', 'street', 'road'), COLGroup.CONCRETE: ('concrete', 'pavement'),
+    COLGroup.GRAVEL: ('gravel',), COLGroup.GRASS: ('grass',), COLGroup.DIRT: ('dirt', 'mud'),
+    COLGroup.SAND: ('sand',), COLGroup.GLASS: ('glass',), COLGroup.WOOD: ('wood',),
+    COLGroup.METAL: ('metal',), COLGroup.ROCK: ('rock',), COLGroup.BUSHES: ('hedge', 'bush'),
+    COLGroup.WATER: ('water',), COLGroup.VEHICLE: ('body',),
+}
+
+# Texture name keywords -> (SA id, GTA3/VC id); first match wins
+_TEXTURE_SURFACES = (
+    (('water', 'sea', 'river', 'pool'),                            39, 19),
+    (('glass', 'window', 'windscreen'),                            45,  7),
+    (('grass', 'lawn', 'turf'),                                     9,  2),
+    (('sand', 'beach', 'desert', 'dune'),                          29, 18),
+    (('gravel', 'shingle', 'pebble'),                               6,  4),
+    (('dirt', 'mud', 'soil', 'earth'),                             26,  4),
+    (('rock', 'stone', 'cliff', 'boulder'),                        35, 26),
+    (('hedge', 'bush', 'leaf', 'leaves', 'foliage'),               41, 25),
+    (('wood', 'plank', 'timber', 'crate'),                         43, 22),
+    (('metal', 'steel', 'iron', 'rust', 'chrome', 'girder'),       51, 11),
+    (('road', 'tarmac', 'asphalt', 'street', 'highway', 'freeway'), 1,  1),
+    (('pave', 'sidewalk', 'curb', 'kerb'),                          4,  5),
+    (('concrete', 'cement', 'brick', 'wall', 'tile', 'floor'),      7,  5),
+    (('carpet',),                                                 71,  0),
+)
+
+
 __all__ = [
+    'convert_material_id',
+    'material_from_texture',
+    'convert_piece_flag',
     'COLGame', 'COLGroup', 'COLFlagSA', 'COLFlagVC',
     'COL_PRESET_GROUP', 'COL_PRESET_SA', 'COL_PRESET_VC',
     'get_material_name', 'get_material_colour', 'get_material_group',

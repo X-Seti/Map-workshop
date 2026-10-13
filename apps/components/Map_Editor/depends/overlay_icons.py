@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-#this belongs in apps/components/Map_Editor/depends/overlay_icons.py - Version: 1
+#this belongs in apps/components/Map_Editor/depends/overlay_icons.py - Version: 6
 # X-Seti - Aug 2026 - IMG Factory 1.6 - Detailed colour SVG icons for Map Workshop's IPL Controls overlay buttons
 
 """
 Detailed, full-colour SVG icons for Map Workshop's own IPL Controls
-overlay toggle buttons (Water, Radar, Tcyc, etc.) - per Keith: "I'd
+overlay toggle buttons (Water, Radar, Tcyc, etc.) -  "I'd
 like well detailed 24x24 colour SVG icons, the ones we had before was
 too simplyed."
 
@@ -14,7 +14,7 @@ currentColor/currentAccent icons) - these are neither. Each icon uses
 its own fixed, explicit colours intrinsic to what it represents
 (water is blue, a radar screen is green, timecyc's own day/night
 split uses real sky colours) rather than a theme-driven token, since
-Keith's own request was specifically for real colour, not another
+my own request was specifically for real colour, not another
 monochrome set. Still delegates to SVGIconFactory._create_icon() for
 the actual QSvgRenderer-to-QPixmap-to-QIcon pipeline (the currentColor/
 currentAccent substitution it performs is a harmless no-op here, since
@@ -38,9 +38,23 @@ from apps.methods.imgfactory_svg_icons import SVGIconFactory
 # OverlayIcons.cull_icon
 # OverlayIcons.zon_icon
 # OverlayIcons.occlusion_icon
+# OverlayIcons.grge_icon
+# OverlayIcons.convert_icon
 # OverlayIcons.sa_nodes_icon
 # OverlayIcons.auzo_icon
 # OverlayIcons.interior_icon
+# OverlayIcons.cycle_icon
+# OverlayIcons.repair_scale_icon
+# OverlayIcons.optimize_icon
+# OverlayIcons.prelight_icon
+# OverlayIcons.add_texture_icon
+# OverlayIcons.del_texture_icon
+# OverlayIcons.export_texture_icon
+# OverlayIcons.replace_texture_icon
+# OverlayIcons.rename_texture_icon
+# OverlayIcons.apply_texture_icon
+# OverlayIcons.save_texture_icon
+# OverlayIcons.search_model_icon
 
 
 class OverlayIcons:
@@ -236,19 +250,18 @@ class OverlayIcons:
 </svg>''', size, color="#000000")
 
     @staticmethod
-    def zon_icon(size: int = 24) -> QIcon: #vers 1
-        """Zones toggle - a planted flag inside a dashed boundary
-        circle, for gameplay/info zone entries."""
+    def zon_icon(size: int = 24) -> QIcon: #vers 2
+        """Zones toggle - amber flag in a dashed box (zones are boxes, not the green radar)."""
         return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <defs>
     <linearGradient id="zonFlag" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#5be08a"/>
-      <stop offset="100%" stop-color="#189a54"/>
+      <stop offset="0%" stop-color="#ffc44d"/>
+      <stop offset="100%" stop-color="#e07a10"/>
     </linearGradient>
   </defs>
-  <circle cx="11.5" cy="13.5" r="8.6" fill="none" stroke="#3fce7a" stroke-width="1.4" stroke-dasharray="3.2 2.6" opacity="0.8"/>
-  <line x1="8.4" y1="21.4" x2="8.4" y2="3.2" stroke="#6b6b70" stroke-width="1.4" stroke-linecap="round"/>
-  <path d="M8.4 3.6 L18.6 6.4 L14.6 9.4 L18.6 12.2 L8.4 15 Z" fill="url(#zonFlag)" stroke="#0e6b34" stroke-width="0.5"/>
+  <rect x="2.6" y="5.2" width="18.8" height="15.6" rx="1.2" fill="#e08a1a" fill-opacity="0.18" stroke="#f0a030" stroke-width="1.4" stroke-dasharray="3 2.2"/>
+  <line x1="8.4" y1="19.6" x2="8.4" y2="2.4" stroke="#c8c8cc" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M8.4 2.8 L18.2 5.4 L14.4 8.2 L18.2 11 L8.4 13.6 Z" fill="url(#zonFlag)" stroke="#8a4a08" stroke-width="0.5"/>
 </svg>''', size, color="#000000")
 
     @staticmethod
@@ -275,7 +288,7 @@ class OverlayIcons:
     @staticmethod
     def grge_icon(size: int = 24) -> QIcon: #vers 1
         """Garage toggle - a simple garage door/shutter shape (Aug 21
-        2026, per Keith: "add support for GRGE") - orange to match
+        2026,  "add support for GRGE") - orange to match
         _grge_box_color, distinct from cull/zone/occl/paths."""
         return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path d="M3 10 L12 3 L21 10 V20 H3 Z" fill="#ffa600" stroke="#a86a00" stroke-width="1"/>
@@ -288,7 +301,7 @@ class OverlayIcons:
     def convert_icon(size: int = 24) -> QIcon: #vers 1
         """Convert (VC<->SA/SOL INST format) button - two opposing
         curved arrows, a standard "convert/exchange" motif (Aug 21
-        2026, per Keith: "having VC -> SA or SA -> VC is something I
+        2026,  "having VC -> SA or SA -> VC is something I
         need, under a convertion SVG icon")."""
         return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path d="M4 8 H16 L13 4" fill="none" stroke="#4fc3f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -351,3 +364,130 @@ class OverlayIcons:
   <circle cx="18.4" cy="17.6" r="4.4" fill="#7a4dff" stroke="#f4f1ff" stroke-width="1.2"/>
 </svg>''', size, color="#000000")
 
+
+    @staticmethod
+    def cycle_icon(size: int = 24) -> QIcon: #vers 1
+        """Cycle Zones/Cull button (Sep 5 2026,  "Cycle,
+        Repair Scale, and Optimize Order need to also be SVG icons")
+        - a circular loop arrow, the standard "cycle/step through"
+        motif, purple to stay visually distinct from Convert's blue
+        exchange arrows."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 4 A8 8 0 1 1 5.6 7.5" fill="none" stroke="#ba68c8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M5 3 L5.6 7.5 L10 6.8" fill="none" stroke="#ba68c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def repair_scale_icon(size: int = 24) -> QIcon: #vers 1
+        """Repair Scale button (Sep 5 2026) - a plain wrench
+        silhouette, the standard "fix/repair" motif, steel grey."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M17 3a4 4 0 0 0-5.66 5.66L4 16v4h4l7.34-7.34A4 4 0 0 0 21 7l-3 3-2-2 3-3z"
+        fill="#b0bec5" stroke="#546e7a" stroke-width="0.8"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def optimize_icon(size: int = 24) -> QIcon: #vers 1
+        """Optimize Load Order button (Sep 5 2026) - three
+        ascending-length bars (the thing being reordered) plus a
+        descending sort arrow, green."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <line x1="4" y1="6" x2="14" y2="6" stroke="#81c784" stroke-width="2" stroke-linecap="round"/>
+  <line x1="4" y1="12" x2="18" y2="12" stroke="#81c784" stroke-width="2" stroke-linecap="round"/>
+  <line x1="4" y1="18" x2="20" y2="18" stroke="#81c784" stroke-width="2" stroke-linecap="round"/>
+  <path d="M21 4 L21 10 M18 8 L21 11 L24 8" fill="none" stroke="#4caf50" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def prelight_icon(size: int = 24) -> QIcon: #vers 1
+        """Force Prelighting toggle (Sep 5 2026,  "showing
+        dark models... some models might not be loading the
+        prelighting, so we need a prelighting on/off SVG button") - a
+        shaded sphere, bright-to-dark gradient, representing baked
+        vertex lighting as opposed to real-time dynamic lighting."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="prelightGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fff59d"/>
+      <stop offset="100%" stop-color="#37474f"/>
+    </linearGradient>
+  </defs>
+  <circle cx="12" cy="12" r="9" fill="url(#prelightGrad)" stroke="#263238" stroke-width="1"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def add_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Add Texture button (Sep 5 2026  texture-editor
+        button request) - a picture frame with a plus sign, green."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2" y="4" width="14" height="14" rx="1" fill="none" stroke="#90a4ae" stroke-width="1.6"/>
+  <circle cx="7" cy="9" r="1.6" fill="#90a4ae"/>
+  <path d="M4 16 L9 11 L12 14 L16 10" fill="none" stroke="#90a4ae" stroke-width="1.4"/>
+  <circle cx="18" cy="18" r="5.5" fill="#4caf50" stroke="#1b1b1b" stroke-width="0.6"/>
+  <path d="M18 15.3 L18 20.7 M15.3 18 L20.7 18" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def del_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Delete Texture button - a picture frame with a red X."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2" y="4" width="14" height="14" rx="1" fill="none" stroke="#90a4ae" stroke-width="1.6"/>
+  <circle cx="7" cy="9" r="1.6" fill="#90a4ae"/>
+  <path d="M4 16 L9 11 L12 14 L16 10" fill="none" stroke="#90a4ae" stroke-width="1.4"/>
+  <circle cx="18" cy="18" r="5.5" fill="#e53935" stroke="#1b1b1b" stroke-width="0.6"/>
+  <path d="M15.8 15.8 L20.2 20.2 M20.2 15.8 L15.8 20.2" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def export_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Export Texture button - an arrow leaving an open box, blue."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4 14 L4 20 L20 20 L20 14" fill="none" stroke="#42a5f5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 3 L12 14 M7 9 L12 4 L17 9" fill="none" stroke="#42a5f5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def replace_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Replace Texture button - two curved swap arrows, orange."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4 8 A8 8 0 0 1 19 5.5" fill="none" stroke="#ffa726" stroke-width="2" stroke-linecap="round"/>
+  <path d="M15.5 3 L19 5.5 L16 9" fill="none" stroke="#ffa726" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M20 16 A8 8 0 0 1 5 18.5" fill="none" stroke="#ffa726" stroke-width="2" stroke-linecap="round"/>
+  <path d="M8.5 21 L5 18.5 L8 15" fill="none" stroke="#ffa726" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def rename_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Rename Texture button - a pencil over a text line, purple."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4 18 L4 21 L7 21 L18 10 L15 7 L4 18 Z" fill="#ab47bc" stroke="#1b1b1b" stroke-width="0.6"/>
+  <path d="M14 8 L17 11" stroke="#f3e5f5" stroke-width="1.2"/>
+  <path d="M19 4 L21 6 L18.5 8.5 L16.5 6.5 Z" fill="#ab47bc" stroke="#1b1b1b" stroke-width="0.6"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def apply_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Apply button - a plain checkmark, teal."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4 13 L9.5 18.5 L20 6" fill="none" stroke="#26a69a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def save_texture_icon(size: int = 24) -> QIcon: #vers 1
+        """Save button - a plain floppy disk, steel blue."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4 4 L16 4 L20 8 L20 20 L4 20 Z" fill="#5c93c4" stroke="#1b1b1b" stroke-width="0.6"/>
+  <rect x="7" y="4" width="8" height="6" fill="#e3f2fd"/>
+  <rect x="6" y="13" width="12" height="7" fill="#e3f2fd"/>
+</svg>''', size, color="#000000")
+
+    @staticmethod
+    def search_model_icon(size: int = 24) -> QIcon: #vers 1
+        """Search loaded instances by model name (Sep 5 2026, per
+         : "a search [O'] function on the ribbon bar to find a
+        model name so I can see the IPL line") - plain magnifying
+        glass."""
+        return SVGIconFactory._create_icon('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <circle cx="10" cy="10" r="6.5" fill="none" stroke="#90caf9" stroke-width="2.2"/>
+  <line x1="14.8" y1="14.8" x2="21" y2="21" stroke="#90caf9" stroke-width="2.4" stroke-linecap="round"/>
+</svg>''', size, color="#000000")
