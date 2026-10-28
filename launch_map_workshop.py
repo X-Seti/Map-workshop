@@ -29,7 +29,7 @@ if __name__ == "__main__":
             from PyQt6.QtWidgets import QApplication
             
             app = QApplication(sys.argv)
-            workshop = map_workshop.MapWorkshop()
+            workshop = map_workshop.ModelWorkshop()   # Map Workshop class keeps its Model Workshop name
             workshop.setWindowTitle("Map Workshop - Standalone")
             workshop.resize(1200, 800)
             workshop.show()
