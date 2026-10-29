@@ -1,4 +1,4 @@
-#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 8
+#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 9
 # X-Seti - October 14 2026 - IMG Factory 1.6 - Map Workshop world load
 
 """
@@ -21,6 +21,7 @@ Game folder, DAT/IPL world load, preload, water/radar settings, world render for
 # _convert_collision_geometry
 # _effective_rotation
 # _game_data_folder_candidates
+# _fill_texture_pane
 # _iv_static_bound_entries
 # _load_game_dat_file
 # _load_game_folder
@@ -2484,7 +2485,47 @@ class MapWorldMixin: #vers 1
         finally:
             table.itemSelectionChanged.connect(self._on_compact_col_selected)
 
-    def _on_ipl_model_row_selected(self, row): #vers 3
+    def _fill_texture_pane(self, model_name, txd_name, note=''): #vers 1
+        """Textures dock: the model's TXD / WTD plus textures inside the model (GTA IV)."""
+        model_cache = getattr(self, '_model_cache', None)
+        tex_list = getattr(self, '_tex_list', None)
+        if tex_list is None:
+            return
+        model = model_cache.get_geometry(model_name) if model_cache else None
+        embedded = dict(getattr(model, 'embedded_textures', None) or {})    # GTA IV .wdr / .wft
+        if not txd_name and not embedded:
+            tex_list.setRowCount(0)
+            if hasattr(self, '_tex_count_lbl'):
+                self._tex_count_lbl.setText(f"No TXD name found for {model_name} (check its IDE entry)")
+            return
+        textures, source, _status = (self._get_txd_textures(txd_name) if model_cache and txd_name
+                                     else (None, None, 'missing'))
+        textures = {**embedded, **(textures or {})}
+        txd_file = model_cache.txd_file_name(txd_name) if model_cache and txd_name else ''
+        tex_list.setRowCount(len(textures))
+        for i, tex in enumerate(textures.values()):
+            thumb_item = QTableWidgetItem()
+            pixmap = self._create_texture_thumbnail(
+                tex.get('rgba_data'), tex.get('width', 0), tex.get('height', 0))
+            if pixmap is not None:
+                thumb_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
+            tex_list.setItem(i, 0, thumb_item)
+            tex_list.setItem(i, 1, QTableWidgetItem(tex.get('name', '')))
+            tex_list.setItem(i, 2, QTableWidgetItem(
+                f"{tex.get('width', '?')}x{tex.get('height', '?')}"))
+            tex_list.setItem(i, 3, QTableWidgetItem(tex.get('format', '')))
+        if hasattr(self, '_tex_count_lbl'):
+            if textures:
+                where = f"{txd_file}, from {source}" if source else "in the model"
+                if embedded and source:
+                    where += f" + {len(embedded)} in the model"
+                self._tex_count_lbl.setText(
+                    f"{len(textures)} texture{'s' if len(textures) != 1 else ''} ({where}){note}")
+            else:
+                self._tex_count_lbl.setText(
+                    f"{txd_file} not found in any indexed IMG archive or as a loose file{note}")
+
+    def _on_ipl_model_row_selected(self, row): #vers 4
         """Show one model's info (Model Name/IDE/ID/TXD fields) and
         its textures (self._tex_list) - the highlighted models get
         there textures shown in the pane below."""
@@ -2513,39 +2554,4 @@ class MapWorldMixin: #vers 1
         if hasattr(self, 'info_txd_name'):
             self.info_txd_name.setText(txd_name or '—')
 
-        tex_list = getattr(self, '_tex_list', None)
-        if tex_list is None:
-            return
-        model = model_cache.get_geometry(model_name) if model_cache else None
-        embedded = dict(getattr(model, 'embedded_textures', None) or {})    # GTA IV .wdr / .wft
-        if not txd_name and not embedded:
-            tex_list.setRowCount(0)
-            if hasattr(self, '_tex_count_lbl'):
-                self._tex_count_lbl.setText(f"No TXD name found for {model_name}")
-            return
-        textures, source, _status = (self._get_txd_textures(txd_name) if model_cache and txd_name
-                                     else (None, None, 'missing'))
-        textures = {**embedded, **(textures or {})}
-        txd_file = model_cache.txd_file_name(txd_name) if model_cache and txd_name else ''
-        tex_list.setRowCount(len(textures))
-        for i, tex in enumerate(textures.values()):
-            thumb_item = QTableWidgetItem()
-            pixmap = self._create_texture_thumbnail(
-                tex.get('rgba_data'), tex.get('width', 0), tex.get('height', 0))
-            if pixmap is not None:
-                thumb_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
-            tex_list.setItem(i, 0, thumb_item)
-            tex_list.setItem(i, 1, QTableWidgetItem(tex.get('name', '')))
-            tex_list.setItem(i, 2, QTableWidgetItem(
-                f"{tex.get('width', '?')}x{tex.get('height', '?')}"))
-            tex_list.setItem(i, 3, QTableWidgetItem(tex.get('format', '')))
-        if hasattr(self, '_tex_count_lbl'):
-            if textures:
-                where = f"{txd_file}, from {source}" if source else "in the model"
-                if embedded and source:
-                    where += f" + {len(embedded)} in the model"
-                self._tex_count_lbl.setText(
-                    f"{len(textures)} texture{'s' if len(textures) != 1 else ''} ({where})")
-            else:
-                self._tex_count_lbl.setText(
-                    f"{txd_file} not found in any indexed IMG archive or as a loose file")
+        self._fill_texture_pane(model_name, txd_name)
