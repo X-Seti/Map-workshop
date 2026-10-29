@@ -1,4 +1,4 @@
-#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 6
+#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 7
 # X-Seti - October 14 2026 - IMG Factory 1.6 - Map Workshop world load
 
 """
@@ -46,6 +46,7 @@ Game folder, DAT/IPL world load, preload, water/radar settings, world render for
 # _refresh_recent_dat_menu
 # _refresh_world_view
 # _refresh_world_view_impl
+# _reload_world_textures
 # _resolve_gamedata_role_marker
 # _rotate_and_translate_offset
 # _rotate_vector_by_quaternion
@@ -2244,6 +2245,18 @@ class MapWorldMixin: #vers 1
                 r = g = b = 0.7
             col_triangles.append((f.a, f.b, f.c, r, g, b))
         return col_vertices, col_triangles
+
+    def _reload_world_textures(self): #vers 1
+        """Texture limit changed: GL textures and converted models rebuilt from the cache."""
+        if getattr(self, '_all_instances', None) is None:
+            return
+        self._geometry_conversion_cache = {}
+        vp = getattr(self, 'preview_widget', None)
+        if vp is not None and hasattr(vp, 'clear_textures'):
+            vp.makeCurrent()
+            vp.clear_textures()
+        self._apply_ipl_visibility_filter(auto_fit=False, clear_display_lists=True)
+        self._set_status("Textures reloaded at the new size limit")
 
     def _refresh_world_view(self, instances, auto_fit=True, clear_display_lists=True): #vers 4
         """Push a full multi-instance 3D world view into the existing
