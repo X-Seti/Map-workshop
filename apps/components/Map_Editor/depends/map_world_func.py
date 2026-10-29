@@ -1,4 +1,4 @@
-#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 7
+#this belongs in apps/components/Map_Editor/depends/map_world_func.py - Version: 8
 # X-Seti - October 14 2026 - IMG Factory 1.6 - Map Workshop world load
 
 """
@@ -2039,17 +2039,17 @@ class MapWorldMixin: #vers 1
         return n if n > 0 else max(1, (os.cpu_count() or 1) - 2)
 
     def _load_models_parallel(self, dlg, model_cache, items, workers,
-                              load_models, load_textures): #vers 2
+                              load_models, load_textures): #vers 3
         """Parse all models/TXDs in worker processes; rows update as each finishes."""
         rows, by_txd, missing = {}, {}, []
         for model_name, txd_name in items:
-            rows[model_name.lower()] = (dlg.model_row(model_name), txd_name if load_textures else "")
+            rows[model_name.lower()] = (dlg.model_row(model_cache.model_file_name(model_name)), txd_name if load_textures else "")
             if load_textures and txd_name:
                 by_txd.setdefault(txd_name.lower(), []).append(model_name.lower())
                 if not model_cache.is_txd_indexed(txd_name):
-                    missing.append(f"{txd_name}.txd")
+                    missing.append(model_cache.txd_file_name(txd_name))
             if load_models and not model_cache.is_dff_indexed(model_name):
-                missing.append(f"{model_name}.dff")
+                missing.append(model_cache.model_file_name(model_name))
         dff_done, txd_done = set(), {}
         total = len(items) * (2 if load_textures else 1)
         state = {'n': 0}
@@ -2098,7 +2098,7 @@ class MapWorldMixin: #vers 1
         return list(dict.fromkeys(missing))
 
     def _load_models_into_dialog(self, dlg, loader, model_cache, instances,
-                                 load_models=True, load_textures=True): #vers 2
+                                 load_models=True, load_textures=True): #vers 3
         """Load each unique model's DFF/TXD with a dialog row each; returns missing files."""
         seen = {}
         for inst in instances:
@@ -2116,16 +2116,16 @@ class MapWorldMixin: #vers 1
                 self._set_status(f"Model loading cancelled after {i} of {len(items)} - "
                                  f"the rest load on demand while browsing")
                 break
-            row = dlg.model_row(model_name)
+            row = dlg.model_row(model_cache.model_file_name(model_name))
             if load_models:
                 if not model_cache.is_dff_indexed(model_name):
-                    missing.append(f"{model_name}.dff")
+                    missing.append(model_cache.model_file_name(model_name))
                 model_cache.get_geometry(model_name)
             tex_text = ""
             if load_textures and txd_name:
                 dlg.set_model(row, 60)
                 if not model_cache.is_txd_indexed(txd_name):
-                    missing.append(f"{txd_name}.txd")
+                    missing.append(model_cache.txd_file_name(txd_name))
                 if txd_name not in tex_counts:
                     tex = model_cache.get_textures(txd_name)
                     tex_counts[txd_name] = len(tex) if tex else 0
@@ -2484,7 +2484,7 @@ class MapWorldMixin: #vers 1
         finally:
             table.itemSelectionChanged.connect(self._on_compact_col_selected)
 
-    def _on_ipl_model_row_selected(self, row): #vers 2
+    def _on_ipl_model_row_selected(self, row): #vers 3
         """Show one model's info (Model Name/IDE/ID/TXD fields) and
         its textures (self._tex_list) - the highlighted models get
         there textures shown in the pane below."""
@@ -2516,13 +2516,17 @@ class MapWorldMixin: #vers 1
         tex_list = getattr(self, '_tex_list', None)
         if tex_list is None:
             return
-        if not txd_name:
+        model = model_cache.get_geometry(model_name) if model_cache else None
+        embedded = dict(getattr(model, 'embedded_textures', None) or {})    # GTA IV .wdr / .wft
+        if not txd_name and not embedded:
             tex_list.setRowCount(0)
             if hasattr(self, '_tex_count_lbl'):
                 self._tex_count_lbl.setText(f"No TXD name found for {model_name}")
             return
-        textures, source, _status = self._get_txd_textures(txd_name) if model_cache else (None, None, 'missing')
-        textures = textures or {}
+        textures, source, _status = (self._get_txd_textures(txd_name) if model_cache and txd_name
+                                     else (None, None, 'missing'))
+        textures = {**embedded, **(textures or {})}
+        txd_file = model_cache.txd_file_name(txd_name) if model_cache and txd_name else ''
         tex_list.setRowCount(len(textures))
         for i, tex in enumerate(textures.values()):
             thumb_item = QTableWidgetItem()
@@ -2537,9 +2541,11 @@ class MapWorldMixin: #vers 1
             tex_list.setItem(i, 3, QTableWidgetItem(tex.get('format', '')))
         if hasattr(self, '_tex_count_lbl'):
             if textures:
+                where = f"{txd_file}, from {source}" if source else "in the model"
+                if embedded and source:
+                    where += f" + {len(embedded)} in the model"
                 self._tex_count_lbl.setText(
-                    f"{len(textures)} texture{'s' if len(textures) != 1 else ''} "
-                    f"({txd_name}.txd, from {source})")
+                    f"{len(textures)} texture{'s' if len(textures) != 1 else ''} ({where})")
             else:
                 self._tex_count_lbl.setText(
-                    f"{txd_name}.txd not found in any indexed IMG archive or as a loose file")
+                    f"{txd_file} not found in any indexed IMG archive or as a loose file")
