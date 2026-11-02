@@ -24,8 +24,6 @@ apps/
   components/
     Map_Editor/
       map_workshop.py           - main application
-      map_workshop_old_version.py - reference copy, pre-refactor
-      model_mesh_editor.py
       dockable_toolbar.py
       depends/                   - Map Editor-specific dependencies
     Model_Editor/depends/        - vendored COL classes (shared with Model Workshop)

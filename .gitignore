@@ -21,3 +21,6 @@ dist/
 /_internal/
 /*.exe
 .venv/
+/*_dist/
+/Map_Workshop
+/Map_Workshop.app/
